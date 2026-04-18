@@ -141,6 +141,10 @@ procedure cbz_bzclose(b: Pointer);
 function cbz_bzerror(b: Pointer; errnum: PInt32): PChar;
     cdecl; external LIBBZ2 name 'BZ2_bzerror';
 
+// BZ2_blockSort — internal sort entry point, used by Phase-4 stub only
+procedure cbz_blockSort(s: PEState);
+    cdecl; external LIBBZ2 name 'BZ2_blockSort';
+
 implementation
 
 end.
