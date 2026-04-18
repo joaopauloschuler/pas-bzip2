@@ -17,6 +17,22 @@ const
   LIBBZ2 = 'bz2';
 
 // ---------------------------------------------------------------------------
+// Huffman primitives (huffman.c) — used by TestHuffman
+// ---------------------------------------------------------------------------
+
+procedure cbz_hbMakeCodeLengths(len: PUChar; freq: PInt32;
+    alphaSize, maxLen: Int32);
+    cdecl; external LIBBZ2 name 'BZ2_hbMakeCodeLengths';
+
+procedure cbz_hbAssignCodes(code: PInt32; length: PUChar;
+    minLen, maxLen, alphaSize: Int32);
+    cdecl; external LIBBZ2 name 'BZ2_hbAssignCodes';
+
+procedure cbz_hbCreateDecodeTables(limit, base, perm: PInt32;
+    length: PUChar; minLen, maxLen, alphaSize: Int32);
+    cdecl; external LIBBZ2 name 'BZ2_hbCreateDecodeTables';
+
+// ---------------------------------------------------------------------------
 // Core (low-level) API
 // ---------------------------------------------------------------------------
 
