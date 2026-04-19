@@ -356,15 +356,22 @@ The streaming compressor/decompressor driver + stdio wrappers.
 - [X] **7.3** Port `BZ2_bzBuffToBuffCompress` and `BZ2_bzBuffToBuffDecompress` — the
   one-shot in-memory wrappers. Used by most of the test harness.
 
-- [ ] **7.4** Port the stdio wrappers: `BZ2_bzWriteOpen`, `BZ2_bzWrite`,
+- [X] **7.4** Port the stdio wrappers: `BZ2_bzWriteOpen`, `BZ2_bzWrite`,
   `BZ2_bzWriteClose`, `BZ2_bzWriteClose64`, `BZ2_bzReadOpen`, `BZ2_bzRead`,
   `BZ2_bzReadClose`, `BZ2_bzReadGetUnused`. These take `FILE*` in C. In Pascal, use
   `THandle` (from `BaseUnix`) and `FpWrite` / `FpRead`, wrapped behind an opaque
   `BZFILE = Pointer` type that actually points to a private `TbzFile` record. Do not
   use `TextFile` (line-ending translation would corrupt the stream).
+  Implementation note: `ferror()` replaced by a `hasIOErr: Bool` flag; `myfeof()` replaced
+  by an `atEof: Bool` flag set when `FpRead` returns 0. Both flags live in `TbzFile`.
+  `BZ_MAX_UNUSED = 5000` and the `TbzFile`/`BZFILE` type are declared in the interface
+  section of `pasbzip2.pas`.
 
-- [ ] **7.5** Port `BZ2_bzopen`, `BZ2_bzdopen`, `BZ2_bzread`, `BZ2_bzwrite`, `BZ2_bzflush`,
+- [X] **7.5** Port `BZ2_bzopen`, `BZ2_bzdopen`, `BZ2_bzread`, `BZ2_bzwrite`, `BZ2_bzflush`,
   `BZ2_bzclose`, `BZ2_bzerror` (the "zlib-compat" helpers).
+  Implementation note: `bzopen_or_bzdopen` uses `fpOpen` (BaseUnix) for path-based open
+  and raw `THandle` for fd-based open. `BZ2_bzflush` is intentional no-op (matches C source).
+  `BZ2_bzclose` closes the file descriptor only when it is not stdin/stdout.
 
 - [X] **7.6** Port `BZ2_bzlibVersion` — returns the version string. Match the C exactly:
   `'1.1.0, 6-Sept-2010'`.

@@ -4,10 +4,7 @@ unit pasbzip2;
 {
   Pascal port of bzip2/libbzip2 1.1.0 — public API and stream management.
   Mirrors bzlib.c: default_bzalloc/bzfree, AssertH fail, BZ2_bzCompressInit/
-  End, BZ2_bzDecompressInit/End, and BZ2_bzlibVersion.
-
-  Phases 4–7 will add BZ2_bzCompress, BZ2_bzDecompress, BZ2_bzBuffToBuffer*,
-  stdio wrappers, etc.
+  End, BZ2_bzDecompressInit/End, BZ2_bzlibVersion, and all stdio wrappers.
 }
 
 interface
@@ -55,9 +52,64 @@ function BZ2_bzBuffToBuffDecompress(dest: PChar; destLen: PUInt32;
 // ---------------------------------------------------------------------------
 function BZ2_bzlibVersion: PChar;
 
+// ---------------------------------------------------------------------------
+// stdio wrappers — Task 7.4
+// In Pascal, the C FILE* is replaced by a THandle (raw OS file descriptor).
+// BZFILE is an opaque Pointer that actually points to a heap-allocated TbzFile.
+// ---------------------------------------------------------------------------
+const
+  BZ_MAX_UNUSED = 5000;
+
+type
+  BZFILE = Pointer;
+
+  PbzFile = ^TbzFile;
+  TbzFile = record
+    handle        : THandle;
+    buf           : array[0..BZ_MAX_UNUSED - 1] of UChar;
+    bufN          : Int32;
+    writing       : Bool;
+    strm          : Tbz_stream;
+    lastErr       : Int32;
+    initialisedOk : Bool;
+    // EOF / error flags replacing C's ferror() / myfeof()
+    atEof         : Bool;
+    hasIOErr      : Bool;
+  end;
+
+function  BZ2_bzWriteOpen(bzerror: PInt32; f: THandle;
+              blockSize100k, verbosity, workFactor: Int32): BZFILE;
+procedure BZ2_bzWrite(bzerror: PInt32; b: BZFILE; buf: Pointer; len: Int32);
+procedure BZ2_bzWriteClose(bzerror: PInt32; b: BZFILE; abandon: Int32;
+              nbytes_in, nbytes_out: PUInt32);
+procedure BZ2_bzWriteClose64(bzerror: PInt32; b: BZFILE; abandon: Int32;
+              nbytes_in_lo32, nbytes_in_hi32,
+              nbytes_out_lo32, nbytes_out_hi32: PUInt32);
+function  BZ2_bzReadOpen(bzerror: PInt32; f: THandle;
+              verbosity, small: Int32;
+              unused: Pointer; nUnused: Int32): BZFILE;
+procedure BZ2_bzReadClose(bzerror: PInt32; b: BZFILE);
+function  BZ2_bzRead(bzerror: PInt32; b: BZFILE;
+              buf: Pointer; len: Int32): Int32;
+procedure BZ2_bzReadGetUnused(bzerror: PInt32; b: BZFILE;
+              unused: PPointer; nUnused: PInt32);
+
+// ---------------------------------------------------------------------------
+// zlib-compat helpers — Task 7.5
+// ---------------------------------------------------------------------------
+function  BZ2_bzopen(path: PChar; mode: PChar): BZFILE;
+function  BZ2_bzdopen(fd: Int32; mode: PChar): BZFILE;
+function  BZ2_bzread(b: BZFILE; buf: Pointer; len: Int32): Int32;
+function  BZ2_bzwrite(b: BZFILE; buf: Pointer; len: Int32): Int32;
+function  BZ2_bzflush(b: BZFILE): Int32;
+procedure BZ2_bzclose(b: BZFILE);
+function  BZ2_bzerror(b: BZFILE; errnum: PInt32): PChar;
+
 implementation
 
 uses
+  BaseUnix,
+  Unix,
   pasbzip2tables,      // BZ_INITIALISE_CRC
   pasbzip2compress,    // BZ2_bsInitWrite, bsFinishWrite, BZ2_compressBlock
   pasbzip2decompress;  // BZ2_decompress, unRLE_obuf_to_output_FAST/SMALL
@@ -763,6 +815,551 @@ end;
 function BZ2_bzlibVersion: PChar;
 begin
   Result := BZ_VERSION_STR;
+end;
+
+// ===========================================================================
+// Internal helpers for stdio wrappers
+// ===========================================================================
+
+{ BZ_SETERR — mirrors the C macro: set *bzerror and bzf^.lastErr }
+procedure BzSetErr(bzerror: PInt32; bzf: PbzFile; eee: Int32); inline;
+begin
+  if bzerror <> nil then bzerror^ := eee;
+  if bzf <> nil then bzf^.lastErr := eee;
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzWriteOpen  (bzlib.c)
+// ---------------------------------------------------------------------------
+function BZ2_bzWriteOpen(bzerror: PInt32; f: THandle;
+    blockSize100k, verbosity, workFactor: Int32): BZFILE;
+var
+  ret  : Int32;
+  bzf  : PbzFile;
+begin
+  BzSetErr(bzerror, nil, BZ_OK);
+
+  if (f < 0) or
+     (blockSize100k < 1) or (blockSize100k > 9) or
+     (workFactor < 0) or (workFactor > 250) or
+     (verbosity < 0) or (verbosity > 4) then
+  begin
+    BzSetErr(bzerror, nil, BZ_PARAM_ERROR);
+    Result := nil; Exit;
+  end;
+
+  bzf := GetMem(SizeOf(TbzFile));
+  if bzf = nil then
+  begin
+    BzSetErr(bzerror, nil, BZ_MEM_ERROR);
+    Result := nil; Exit;
+  end;
+
+  BzSetErr(bzerror, bzf, BZ_OK);
+  bzf^.initialisedOk := BZ_FALSE;
+  bzf^.bufN          := 0;
+  bzf^.handle        := f;
+  bzf^.writing       := BZ_TRUE;
+  bzf^.atEof         := BZ_FALSE;
+  bzf^.hasIOErr      := BZ_FALSE;
+  bzf^.strm.bzalloc  := nil;
+  bzf^.strm.bzfree   := nil;
+  bzf^.strm.opaque   := nil;
+
+  if workFactor = 0 then workFactor := 30;
+  ret := BZ2_bzCompressInit(@bzf^.strm, blockSize100k, verbosity, workFactor);
+  if ret <> BZ_OK then
+  begin
+    BzSetErr(bzerror, bzf, ret);
+    FreeMem(bzf);
+    Result := nil; Exit;
+  end;
+
+  bzf^.strm.avail_in := 0;
+  bzf^.initialisedOk := BZ_TRUE;
+  Result := bzf;
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzWrite  (bzlib.c)
+// ---------------------------------------------------------------------------
+procedure BZ2_bzWrite(bzerror: PInt32; b: BZFILE; buf: Pointer; len: Int32);
+var
+  n, n2, ret : Int32;
+  bzf         : PbzFile;
+begin
+  bzf := PbzFile(b);
+  BzSetErr(bzerror, bzf, BZ_OK);
+
+  if (bzf = nil) or (buf = nil) or (len < 0) then
+  begin BzSetErr(bzerror, bzf, BZ_PARAM_ERROR); Exit; end;
+  if bzf^.writing = BZ_FALSE then
+  begin BzSetErr(bzerror, bzf, BZ_SEQUENCE_ERROR); Exit; end;
+  if bzf^.hasIOErr = BZ_TRUE then
+  begin BzSetErr(bzerror, bzf, BZ_IO_ERROR); Exit; end;
+  if len = 0 then
+  begin BzSetErr(bzerror, bzf, BZ_OK); Exit; end;
+
+  bzf^.strm.avail_in := len;
+  bzf^.strm.next_in  := PChar(buf);
+
+  while True do
+  begin
+    bzf^.strm.avail_out := BZ_MAX_UNUSED;
+    bzf^.strm.next_out  := PChar(@bzf^.buf[0]);
+    ret := BZ2_bzCompress(@bzf^.strm, BZ_RUN);
+    if ret <> BZ_RUN_OK then
+    begin BzSetErr(bzerror, bzf, ret); Exit; end;
+
+    if bzf^.strm.avail_out < BZ_MAX_UNUSED then
+    begin
+      n  := BZ_MAX_UNUSED - Int32(bzf^.strm.avail_out);
+      n2 := FpWrite(bzf^.handle, bzf^.buf[0], n);
+      if n2 <> n then
+      begin
+        bzf^.hasIOErr := BZ_TRUE;
+        BzSetErr(bzerror, bzf, BZ_IO_ERROR); Exit;
+      end;
+    end;
+
+    if bzf^.strm.avail_in = 0 then
+    begin BzSetErr(bzerror, bzf, BZ_OK); Exit; end;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzWriteClose  (bzlib.c)
+// ---------------------------------------------------------------------------
+procedure BZ2_bzWriteClose(bzerror: PInt32; b: BZFILE; abandon: Int32;
+    nbytes_in, nbytes_out: PUInt32);
+begin
+  BZ2_bzWriteClose64(bzerror, b, abandon,
+      nbytes_in, nil, nbytes_out, nil);
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzWriteClose64  (bzlib.c)
+// ---------------------------------------------------------------------------
+procedure BZ2_bzWriteClose64(bzerror: PInt32; b: BZFILE; abandon: Int32;
+    nbytes_in_lo32, nbytes_in_hi32,
+    nbytes_out_lo32, nbytes_out_hi32: PUInt32);
+var
+  n, n2, ret : Int32;
+  bzf         : PbzFile;
+begin
+  bzf := PbzFile(b);
+
+  if bzf = nil then begin BzSetErr(bzerror, nil, BZ_OK); Exit; end;
+  if bzf^.writing = BZ_FALSE then
+  begin BzSetErr(bzerror, bzf, BZ_SEQUENCE_ERROR); Exit; end;
+  if bzf^.hasIOErr = BZ_TRUE then
+  begin BzSetErr(bzerror, bzf, BZ_IO_ERROR); Exit; end;
+
+  if nbytes_in_lo32  <> nil then nbytes_in_lo32^  := 0;
+  if nbytes_in_hi32  <> nil then nbytes_in_hi32^  := 0;
+  if nbytes_out_lo32 <> nil then nbytes_out_lo32^ := 0;
+  if nbytes_out_hi32 <> nil then nbytes_out_hi32^ := 0;
+
+  if (abandon = 0) and (bzf^.lastErr = BZ_OK) then
+  begin
+    while True do
+    begin
+      bzf^.strm.avail_out := BZ_MAX_UNUSED;
+      bzf^.strm.next_out  := PChar(@bzf^.buf[0]);
+      ret := BZ2_bzCompress(@bzf^.strm, BZ_FINISH);
+      if (ret <> BZ_FINISH_OK) and (ret <> BZ_STREAM_END) then
+      begin BzSetErr(bzerror, bzf, ret); Exit; end;
+
+      if bzf^.strm.avail_out < BZ_MAX_UNUSED then
+      begin
+        n  := BZ_MAX_UNUSED - Int32(bzf^.strm.avail_out);
+        n2 := FpWrite(bzf^.handle, bzf^.buf[0], n);
+        if n2 <> n then
+        begin
+          bzf^.hasIOErr := BZ_TRUE;
+          BzSetErr(bzerror, bzf, BZ_IO_ERROR); Exit;
+        end;
+      end;
+
+      if ret = BZ_STREAM_END then Break;
+    end;
+  end;
+
+  // Raw fd: no buffered data to flush; skip fflush equivalent.
+
+  if nbytes_in_lo32  <> nil then nbytes_in_lo32^  := bzf^.strm.total_in_lo32;
+  if nbytes_in_hi32  <> nil then nbytes_in_hi32^  := bzf^.strm.total_in_hi32;
+  if nbytes_out_lo32 <> nil then nbytes_out_lo32^ := bzf^.strm.total_out_lo32;
+  if nbytes_out_hi32 <> nil then nbytes_out_hi32^ := bzf^.strm.total_out_hi32;
+
+  BzSetErr(bzerror, bzf, BZ_OK);
+  BZ2_bzCompressEnd(@bzf^.strm);
+  FreeMem(bzf);
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzReadOpen  (bzlib.c)
+// ---------------------------------------------------------------------------
+function BZ2_bzReadOpen(bzerror: PInt32; f: THandle;
+    verbosity, small: Int32;
+    unused: Pointer; nUnused: Int32): BZFILE;
+var
+  bzf : PbzFile;
+  ret : Int32;
+  i   : Int32;
+  src : PUChar;
+begin
+  BzSetErr(bzerror, nil, BZ_OK);
+
+  if (f < 0) or
+     ((small <> 0) and (small <> 1)) or
+     (verbosity < 0) or (verbosity > 4) or
+     ((unused = nil) and (nUnused <> 0)) or
+     ((unused <> nil) and ((nUnused < 0) or (nUnused > BZ_MAX_UNUSED))) then
+  begin
+    BzSetErr(bzerror, nil, BZ_PARAM_ERROR);
+    Result := nil; Exit;
+  end;
+
+  bzf := GetMem(SizeOf(TbzFile));
+  if bzf = nil then
+  begin
+    BzSetErr(bzerror, nil, BZ_MEM_ERROR);
+    Result := nil; Exit;
+  end;
+
+  BzSetErr(bzerror, bzf, BZ_OK);
+  bzf^.initialisedOk := BZ_FALSE;
+  bzf^.handle        := f;
+  bzf^.bufN          := 0;
+  bzf^.writing       := BZ_FALSE;
+  bzf^.atEof         := BZ_FALSE;
+  bzf^.hasIOErr      := BZ_FALSE;
+  bzf^.strm.bzalloc  := nil;
+  bzf^.strm.bzfree   := nil;
+  bzf^.strm.opaque   := nil;
+
+  // pre-load any caller-supplied unused bytes
+  src := PUChar(unused);
+  for i := 0 to nUnused - 1 do
+  begin
+    bzf^.buf[bzf^.bufN] := src^;
+    Inc(src);
+    Inc(bzf^.bufN);
+  end;
+
+  ret := BZ2_bzDecompressInit(@bzf^.strm, verbosity, small);
+  if ret <> BZ_OK then
+  begin
+    BzSetErr(bzerror, bzf, ret);
+    FreeMem(bzf);
+    Result := nil; Exit;
+  end;
+
+  bzf^.strm.avail_in := bzf^.bufN;
+  bzf^.strm.next_in  := PChar(@bzf^.buf[0]);
+
+  bzf^.initialisedOk := BZ_TRUE;
+  Result := bzf;
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzReadClose  (bzlib.c)
+// ---------------------------------------------------------------------------
+procedure BZ2_bzReadClose(bzerror: PInt32; b: BZFILE);
+var
+  bzf : PbzFile;
+begin
+  bzf := PbzFile(b);
+  BzSetErr(bzerror, bzf, BZ_OK);
+
+  if bzf = nil then begin BzSetErr(bzerror, nil, BZ_OK); Exit; end;
+  if bzf^.writing = BZ_TRUE then
+  begin BzSetErr(bzerror, bzf, BZ_SEQUENCE_ERROR); Exit; end;
+
+  if bzf^.initialisedOk = BZ_TRUE then
+    BZ2_bzDecompressEnd(@bzf^.strm);
+  FreeMem(bzf);
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzRead  (bzlib.c)
+// ---------------------------------------------------------------------------
+function BZ2_bzRead(bzerror: PInt32; b: BZFILE;
+    buf: Pointer; len: Int32): Int32;
+var
+  n, ret : Int32;
+  bzf     : PbzFile;
+begin
+  bzf := PbzFile(b);
+  BzSetErr(bzerror, bzf, BZ_OK);
+
+  if (bzf = nil) or (buf = nil) or (len < 0) then
+  begin BzSetErr(bzerror, bzf, BZ_PARAM_ERROR); Result := 0; Exit; end;
+  if bzf^.writing = BZ_TRUE then
+  begin BzSetErr(bzerror, bzf, BZ_SEQUENCE_ERROR); Result := 0; Exit; end;
+  if len = 0 then
+  begin BzSetErr(bzerror, bzf, BZ_OK); Result := 0; Exit; end;
+
+  bzf^.strm.avail_out := len;
+  bzf^.strm.next_out  := PChar(buf);
+
+  while True do
+  begin
+    if bzf^.hasIOErr = BZ_TRUE then
+    begin BzSetErr(bzerror, bzf, BZ_IO_ERROR); Result := 0; Exit; end;
+
+    if (bzf^.strm.avail_in = 0) and (bzf^.atEof = BZ_FALSE) then
+    begin
+      n := FpRead(bzf^.handle, bzf^.buf[0], BZ_MAX_UNUSED);
+      if n < 0 then
+      begin
+        bzf^.hasIOErr := BZ_TRUE;
+        BzSetErr(bzerror, bzf, BZ_IO_ERROR); Result := 0; Exit;
+      end;
+      if n = 0 then
+        bzf^.atEof := BZ_TRUE
+      else
+      begin
+        bzf^.bufN          := n;
+        bzf^.strm.avail_in := n;
+        bzf^.strm.next_in  := PChar(@bzf^.buf[0]);
+      end;
+    end;
+
+    ret := BZ2_bzDecompress(@bzf^.strm);
+    if (ret <> BZ_OK) and (ret <> BZ_STREAM_END) then
+    begin BzSetErr(bzerror, bzf, ret); Result := 0; Exit; end;
+
+    if (ret = BZ_OK) and (bzf^.atEof = BZ_TRUE) and
+       (bzf^.strm.avail_in = 0) and (bzf^.strm.avail_out > 0) then
+    begin BzSetErr(bzerror, bzf, BZ_UNEXPECTED_EOF); Result := 0; Exit; end;
+
+    if ret = BZ_STREAM_END then
+    begin
+      BzSetErr(bzerror, bzf, BZ_STREAM_END);
+      Result := len - Int32(bzf^.strm.avail_out); Exit;
+    end;
+    if bzf^.strm.avail_out = 0 then
+    begin BzSetErr(bzerror, bzf, BZ_OK); Result := len; Exit; end;
+  end;
+
+  Result := 0; // not reached
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzReadGetUnused  (bzlib.c)
+// ---------------------------------------------------------------------------
+procedure BZ2_bzReadGetUnused(bzerror: PInt32; b: BZFILE;
+    unused: PPointer; nUnused: PInt32);
+var
+  bzf : PbzFile;
+begin
+  bzf := PbzFile(b);
+  if bzf = nil then begin BzSetErr(bzerror, nil, BZ_PARAM_ERROR); Exit; end;
+  if bzf^.lastErr <> BZ_STREAM_END then
+  begin BzSetErr(bzerror, bzf, BZ_SEQUENCE_ERROR); Exit; end;
+  if (unused = nil) or (nUnused = nil) then
+  begin BzSetErr(bzerror, bzf, BZ_PARAM_ERROR); Exit; end;
+
+  BzSetErr(bzerror, bzf, BZ_OK);
+  nUnused^ := bzf^.strm.avail_in;
+  unused^  := bzf^.strm.next_in;
+end;
+
+// ===========================================================================
+// zlib-compat helpers — Task 7.5
+// ===========================================================================
+
+{ Error string table mirroring C's bzerrorstrings[] }
+const
+  BzErrorStrings : array[0..9] of PChar = (
+    'OK',
+    'SEQUENCE_ERROR',
+    'PARAM_ERROR',
+    'MEM_ERROR',
+    'DATA_ERROR',
+    'DATA_ERROR_MAGIC',
+    'IO_ERROR',
+    'UNEXPECTED_EOF',
+    'OUTBUFF_FULL',
+    'CONFIG_ERROR'
+  );
+
+{ Internal: open or attach — mirrors bzopen_or_bzdopen in bzlib.c }
+function bzopen_or_bzdopen(path: PChar; fd: Int32;
+    mode: PChar; open_mode: Int32): BZFILE;
+var
+  bzerr        : Int32;
+  blockSize100k : Int32;
+  writing       : Int32;
+  verbosity     : Int32;
+  workFactor    : Int32;
+  smallMode     : Int32;
+  nUnused       : Int32;
+  fp            : THandle;
+  bzfp          : BZFILE;
+  p             : PChar;
+  unused        : array[0..BZ_MAX_UNUSED - 1] of Char;
+  flags         : Int32;
+begin
+  blockSize100k := 9;
+  writing       := 0;
+  verbosity     := 0;
+  workFactor    := 30;
+  smallMode     := 0;
+  nUnused       := 0;
+  fp            := -1;
+  bzfp          := nil;
+
+  if mode = nil then begin Result := nil; Exit; end;
+  p := mode;
+  while p^ <> #0 do
+  begin
+    case p^ of
+      'r': writing := 0;
+      'w': writing := 1;
+      's': smallMode := 1;
+      else
+        if (p^ >= '1') and (p^ <= '9') then
+          blockSize100k := Ord(p^) - BZ_HDR_0;
+    end;
+    Inc(p);
+  end;
+
+  if open_mode = 0 then
+  begin
+    // bzopen: open by path (or use stdin/stdout for empty path)
+    if (path = nil) or (path^ = #0) then
+    begin
+      if writing <> 0 then fp := StdOutputHandle
+      else fp := StdInputHandle;
+    end
+    else
+    begin
+      if writing <> 0 then
+        flags := O_WRONLY or O_CREAT or O_TRUNC
+      else
+        flags := O_RDONLY;
+      fp := fpOpen(path, flags, &644);
+    end;
+  end
+  else
+  begin
+    // bzdopen: fd already provided
+    fp := THandle(fd);
+  end;
+
+  if fp < 0 then begin Result := nil; Exit; end;
+
+  if writing <> 0 then
+  begin
+    if blockSize100k < 1 then blockSize100k := 1;
+    if blockSize100k > 9 then blockSize100k := 9;
+    bzfp := BZ2_bzWriteOpen(@bzerr, fp, blockSize100k, verbosity, workFactor);
+  end
+  else
+  begin
+    bzfp := BZ2_bzReadOpen(@bzerr, fp, verbosity, smallMode, @unused[0], nUnused);
+  end;
+
+  if bzfp = nil then
+  begin
+    // close the fd only if we opened it ourselves
+    if (open_mode = 0) and (fp <> StdInputHandle) and (fp <> StdOutputHandle) then
+      fpClose(fp);
+    Result := nil; Exit;
+  end;
+  Result := bzfp;
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzopen  (bzlib.c)
+// ---------------------------------------------------------------------------
+function BZ2_bzopen(path: PChar; mode: PChar): BZFILE;
+begin
+  Result := bzopen_or_bzdopen(path, -1, mode, 0);
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzdopen  (bzlib.c)
+// ---------------------------------------------------------------------------
+function BZ2_bzdopen(fd: Int32; mode: PChar): BZFILE;
+begin
+  Result := bzopen_or_bzdopen(nil, fd, mode, 1);
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzread  (bzlib.c)
+// ---------------------------------------------------------------------------
+function BZ2_bzread(b: BZFILE; buf: Pointer; len: Int32): Int32;
+var
+  bzerr  : Int32;
+  nread  : Int32;
+begin
+  if PbzFile(b)^.lastErr = BZ_STREAM_END then begin Result := 0; Exit; end;
+  nread := BZ2_bzRead(@bzerr, b, buf, len);
+  if (bzerr = BZ_OK) or (bzerr = BZ_STREAM_END) then
+    Result := nread
+  else
+    Result := -1;
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzwrite  (bzlib.c)
+// ---------------------------------------------------------------------------
+function BZ2_bzwrite(b: BZFILE; buf: Pointer; len: Int32): Int32;
+var
+  bzerr : Int32;
+begin
+  BZ2_bzWrite(@bzerr, b, buf, len);
+  if bzerr = BZ_OK then Result := len
+  else Result := -1;
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzflush  (bzlib.c) — intentional no-op (matches the C source)
+// ---------------------------------------------------------------------------
+function BZ2_bzflush(b: BZFILE): Int32;
+begin
+  Result := 0;
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzclose  (bzlib.c)
+// ---------------------------------------------------------------------------
+procedure BZ2_bzclose(b: BZFILE);
+var
+  bzerr : Int32;
+  fp    : THandle;
+begin
+  if b = nil then Exit;
+  fp := PbzFile(b)^.handle;
+  if PbzFile(b)^.writing = BZ_TRUE then
+  begin
+    BZ2_bzWriteClose(@bzerr, b, 0, nil, nil);
+    if bzerr <> BZ_OK then
+      BZ2_bzWriteClose(nil, b, 1, nil, nil);
+  end
+  else
+    BZ2_bzReadClose(@bzerr, b);
+  if (fp <> StdInputHandle) and (fp <> StdOutputHandle) then
+    fpClose(fp);
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzerror  (bzlib.c)
+// ---------------------------------------------------------------------------
+function BZ2_bzerror(b: BZFILE; errnum: PInt32): PChar;
+var
+  err : Int32;
+begin
+  err := PbzFile(b)^.lastErr;
+  if err > 0 then err := 0;
+  errnum^ := err;
+  err := -err;
+  if err > 9 then err := 0; // guard against unknown codes
+  Result := BzErrorStrings[err];
 end;
 
 end.
