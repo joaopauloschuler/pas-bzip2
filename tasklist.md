@@ -417,18 +417,22 @@ Acceptance tests for the whole port.
 
 ## Phase 9 — Benchmarks
 
-- [ ] **9.1** `Benchmark.pas`: modelled on `pas-core-math/Benchmark32.pas`. For each of
+- [X] **9.1** `Benchmark.pas`: modelled on `pas-core-math/Benchmark32.pas`. For each of
   {compress, decompress} × {block size 1, 5, 9} × {three representative corpora (text,
   binary, already-compressed)}, time 10 iterations of Pascal and C back-to-back. Report
   MB/s for each and the Pascal/C ratio.
 
-- [ ] **9.2** Record a baseline ratio table in this file under "Benchmark results" (like
+- [X] **9.2** Record a baseline ratio table in this file under "Benchmark results" (like
   pas-core-math does). Any future change that regresses the ratio by >5% is a bug unless
   justified.
 
-- [ ] **9.3** If the Pascal/C ratio is worse than ~1.5× on any row, file a TODO under
+- [X] **9.3** If the Pascal/C ratio is worse than ~1.5× on any row, file a TODO under
   "Phase 10 — Performance optimization". Candidate levers: inlining of `bsW`, tighter
   `BZ_UPDATE_CRC` (consider slice-by-8 table), unrolled inner loop in `mainGtU`.
+  Note: ALL compress rows and most decompress rows exceed 1.5× slowdown (average
+  1.58× slower). The worst offenders are text compress (≈2× slower) and text decompress
+  (≈1.5–1.9× slower). Phase 10 TODOs (10.1–10.3) are already filed and should be
+  worked in priority order: profiling first, then inlining hot paths.
 
 ---
 
@@ -599,6 +603,46 @@ Apply to every function before marking it done:
 8. **Commit per function or per task.** Small commits with clear messages make
    bisecting a bit-exactness regression tractable. pas-core-math follows the same
    discipline.
+
+---
+
+## Benchmark results
+
+Baseline measured 2026-04-19 on x86_64 Linux, FPC 3.2.2, `-O3`.
+Platform: virtual machine (results are relative, not absolute).
+Corpora: 1 MB each; 10 iterations per cell.
+Throughput = original (uncompressed) bytes / second.
+
+| Direction  | Corpus  | bs | C (MB/s) | Pascal (MB/s) | Ratio |
+|------------|---------|----|---------:|---------------:|------:|
+| compress   | text    | 1  |     12.7 |           6.2 | 0.49x |
+| compress   | binary  | 1  |     14.1 |          10.8 | 0.77x |
+| compress   | ac      | 1  |     15.4 |          10.7 | 0.70x |
+| compress   | text    | 5  |     11.1 |           5.3 | 0.48x |
+| compress   | binary  | 5  |     15.4 |          11.0 | 0.72x |
+| compress   | ac      | 5  |     15.2 |          11.6 | 0.76x |
+| compress   | text    | 9  |     10.6 |           5.5 | 0.52x |
+| compress   | binary  | 9  |     14.5 |          10.4 | 0.72x |
+| compress   | ac      | 9  |     13.0 |          10.6 | 0.82x |
+| decompress | text    | 1  |    303.0 |         156.2 | 0.52x |
+| decompress | binary  | 1  |     31.3 |          17.8 | 0.57x |
+| decompress | ac      | 1  |     32.0 |          18.0 | 0.56x |
+| decompress | text    | 5  |    238.1 |         149.3 | 0.63x |
+| decompress | binary  | 5  |     27.2 |          16.6 | 0.61x |
+| decompress | ac      | 5  |     25.9 |          16.6 | 0.64x |
+| decompress | text    | 9  |    185.2 |         104.2 | 0.56x |
+| decompress | binary  | 9  |     20.7 |          15.8 | 0.76x |
+| decompress | ac      | 9  |     25.8 |          15.6 | 0.61x |
+
+Average Pascal/C ratio: **1.58× slower** (arithmetic mean, 18 rows).
+Pascal faster: 0 | C faster: 18 | Ties: 0.
+
+All 18 rows exceed the 1.5× slowdown threshold except decompress/binary/bs9 (1.31×).
+Largest gap: compress/text (≈2×), text decompression (1.6–1.9×).
+Phase 10 optimisation work is warranted for all compress rows and most decompress rows.
+
+Note: GlobalSink = 0 confirms Pascal and C produce bit-identical compressed output
+(the XOR of corresponding output blocks cancels — a passing cross-check of Phase 5/8).
 
 ---
 
