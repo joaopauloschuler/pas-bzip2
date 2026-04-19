@@ -35,6 +35,22 @@ function BZ2_bzDecompressInit(strm: Pbz_stream;
 function BZ2_bzDecompressEnd(strm: Pbz_stream): Int32;
 
 // ---------------------------------------------------------------------------
+// Compression / decompression streaming
+// ---------------------------------------------------------------------------
+function BZ2_bzCompress(strm: Pbz_stream; action: Int32): Int32;
+function BZ2_bzDecompress(strm: Pbz_stream): Int32;
+
+// ---------------------------------------------------------------------------
+// Buffer-to-buffer convenience wrappers
+// ---------------------------------------------------------------------------
+function BZ2_bzBuffToBuffCompress(dest: PChar; destLen: PUInt32;
+    source: PChar; sourceLen: UInt32;
+    blockSize100k, verbosity, workFactor: Int32): Int32;
+function BZ2_bzBuffToBuffDecompress(dest: PChar; destLen: PUInt32;
+    source: PChar; sourceLen: UInt32;
+    small, verbosity: Int32): Int32;
+
+// ---------------------------------------------------------------------------
 // Version query
 // ---------------------------------------------------------------------------
 function BZ2_bzlibVersion: PChar;
@@ -42,8 +58,9 @@ function BZ2_bzlibVersion: PChar;
 implementation
 
 uses
-  pasbzip2tables,    // BZ_INITIALISE_CRC
-  pasbzip2compress;  // BZ2_bsInitWrite, bsFinishWrite
+  pasbzip2tables,      // BZ_INITIALISE_CRC
+  pasbzip2compress,    // BZ2_bsInitWrite, bsFinishWrite, BZ2_compressBlock
+  pasbzip2decompress;  // BZ2_decompress, unRLE_obuf_to_output_FAST/SMALL
 
 // ---------------------------------------------------------------------------
 // Version string  (must match bz_version.h exactly)
@@ -313,6 +330,430 @@ begin
   if s^.ll4  <> nil then BZFREE(strm, s^.ll4);
   BZFREE(strm, strm^.state);
   strm^.state := nil;
+  Result := BZ_OK;
+end;
+
+// ---------------------------------------------------------------------------
+// isempty_RL  (bzlib.c)
+// ---------------------------------------------------------------------------
+function isempty_RL(s: PEState): Bool; inline;
+begin
+  if (s^.state_in_ch < 256) and (s^.state_in_len > 0) then
+    Result := BZ_FALSE
+  else
+    Result := BZ_TRUE;
+end;
+
+// ---------------------------------------------------------------------------
+// add_pair_to_block  (bzlib.c)
+// ---------------------------------------------------------------------------
+procedure add_pair_to_block(s: PEState);
+var
+  i: Int32;
+  ch: UChar;
+begin
+  ch := UChar(s^.state_in_ch);
+  for i := 0 to s^.state_in_len - 1 do
+    BZ_UPDATE_CRC(s^.blockCRC, ch);
+  s^.inUse[s^.state_in_ch] := BZ_TRUE;
+  case s^.state_in_len of
+    1: begin
+         s^.block[s^.nblock] := ch; Inc(s^.nblock);
+       end;
+    2: begin
+         s^.block[s^.nblock] := ch; Inc(s^.nblock);
+         s^.block[s^.nblock] := ch; Inc(s^.nblock);
+       end;
+    3: begin
+         s^.block[s^.nblock] := ch; Inc(s^.nblock);
+         s^.block[s^.nblock] := ch; Inc(s^.nblock);
+         s^.block[s^.nblock] := ch; Inc(s^.nblock);
+       end;
+  else
+    s^.inUse[s^.state_in_len - 4] := BZ_TRUE;
+    s^.block[s^.nblock] := ch; Inc(s^.nblock);
+    s^.block[s^.nblock] := ch; Inc(s^.nblock);
+    s^.block[s^.nblock] := ch; Inc(s^.nblock);
+    s^.block[s^.nblock] := ch; Inc(s^.nblock);
+    s^.block[s^.nblock] := UChar(s^.state_in_len - 4); Inc(s^.nblock);
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// flush_RL  (bzlib.c)
+// ---------------------------------------------------------------------------
+procedure flush_RL(s: PEState); inline;
+begin
+  if s^.state_in_ch < 256 then add_pair_to_block(s);
+  init_RL(s);
+end;
+
+// ---------------------------------------------------------------------------
+// add_char_to_block  — inline equivalent of ADD_CHAR_TO_BLOCK macro
+// ---------------------------------------------------------------------------
+procedure add_char_to_block(s: PEState; zchh: UInt32); inline;
+begin
+  { fast track: different char with run length 1 }
+  if (zchh <> s^.state_in_ch) and (s^.state_in_len = 1) then
+  begin
+    BZ_UPDATE_CRC(s^.blockCRC, UChar(s^.state_in_ch));
+    s^.inUse[s^.state_in_ch] := BZ_TRUE;
+    s^.block[s^.nblock] := UChar(s^.state_in_ch);
+    Inc(s^.nblock);
+    s^.state_in_ch := zchh;
+  end
+  else
+  { general: different char or run length maxed out }
+  if (zchh <> s^.state_in_ch) or (s^.state_in_len = 255) then
+  begin
+    if s^.state_in_ch < 256 then add_pair_to_block(s);
+    s^.state_in_ch  := zchh;
+    s^.state_in_len := 1;
+  end
+  else
+    Inc(s^.state_in_len);
+end;
+
+// ---------------------------------------------------------------------------
+// copy_input_until_stop  (bzlib.c)
+// ---------------------------------------------------------------------------
+function copy_input_until_stop(s: PEState): Bool;
+var
+  progress_in: Bool;
+begin
+  progress_in := BZ_FALSE;
+  if s^.mode = BZ_M_RUNNING then
+  begin
+    while True do
+    begin
+      if s^.nblock >= s^.nblockMAX then break;
+      if s^.strm^.avail_in = 0 then break;
+      progress_in := BZ_TRUE;
+      add_char_to_block(s, UInt32(PUChar(s^.strm^.next_in)^));
+      Inc(s^.strm^.next_in);
+      Dec(s^.strm^.avail_in);
+      Inc(s^.strm^.total_in_lo32);
+      if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    end;
+  end
+  else
+  begin
+    while True do
+    begin
+      if s^.nblock >= s^.nblockMAX then break;
+      if s^.strm^.avail_in = 0 then break;
+      if s^.avail_in_expect = 0 then break;
+      progress_in := BZ_TRUE;
+      add_char_to_block(s, UInt32(PUChar(s^.strm^.next_in)^));
+      Inc(s^.strm^.next_in);
+      Dec(s^.strm^.avail_in);
+      Inc(s^.strm^.total_in_lo32);
+      if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+      Dec(s^.avail_in_expect);
+    end;
+  end;
+  Result := progress_in;
+end;
+
+// ---------------------------------------------------------------------------
+// copy_output_until_stop  (bzlib.c)
+// ---------------------------------------------------------------------------
+function copy_output_until_stop(s: PEState): Bool;
+var
+  progress_out: Bool;
+begin
+  progress_out := BZ_FALSE;
+  while True do
+  begin
+    if s^.strm^.avail_out = 0 then break;
+    if s^.state_out_pos >= s^.numZ then break;
+    progress_out := BZ_TRUE;
+    s^.strm^.next_out^ := Char(s^.zbits[s^.state_out_pos]);
+    Inc(s^.state_out_pos);
+    Dec(s^.strm^.avail_out);
+    Inc(s^.strm^.next_out);
+    Inc(s^.strm^.total_out_lo32);
+    if s^.strm^.total_out_lo32 = 0 then Inc(s^.strm^.total_out_hi32);
+  end;
+  Result := progress_out;
+end;
+
+// ---------------------------------------------------------------------------
+// handle_compress  (bzlib.c)
+// ---------------------------------------------------------------------------
+function handle_compress(strm: Pbz_stream): Bool;
+var
+  progress_in:  Bool;
+  progress_out: Bool;
+  s: PEState;
+begin
+  progress_in  := BZ_FALSE;
+  progress_out := BZ_FALSE;
+  s := PEState(strm^.state);
+  while True do
+  begin
+    if s^.state = BZ_S_OUTPUT then
+    begin
+      if copy_output_until_stop(s) = BZ_TRUE then progress_out := BZ_TRUE;
+      if s^.state_out_pos < s^.numZ then break;
+      if (s^.mode = BZ_M_FINISHING) and
+         (s^.avail_in_expect = 0) and
+         (isempty_RL(s) = BZ_TRUE) then break;
+      prepare_new_block(s);
+      s^.state := BZ_S_INPUT;
+      if (s^.mode = BZ_M_FLUSHING) and
+         (s^.avail_in_expect = 0) and
+         (isempty_RL(s) = BZ_TRUE) then break;
+    end;
+    if s^.state = BZ_S_INPUT then
+    begin
+      if copy_input_until_stop(s) = BZ_TRUE then progress_in := BZ_TRUE;
+      if (s^.mode <> BZ_M_RUNNING) and (s^.avail_in_expect = 0) then
+      begin
+        flush_RL(s);
+        BZ2_compressBlock(s, Bool(Ord(s^.mode = BZ_M_FINISHING)));
+        s^.state := BZ_S_OUTPUT;
+      end
+      else if s^.nblock >= s^.nblockMAX then
+      begin
+        BZ2_compressBlock(s, BZ_FALSE);
+        s^.state := BZ_S_OUTPUT;
+      end
+      else if s^.strm^.avail_in = 0 then
+        break;
+    end;
+  end;
+  if (progress_in = BZ_TRUE) or (progress_out = BZ_TRUE) then
+    Result := BZ_TRUE
+  else
+    Result := BZ_FALSE;
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzCompress  (bzlib.c)
+// ---------------------------------------------------------------------------
+function BZ2_bzCompress(strm: Pbz_stream; action: Int32): Int32;
+var
+  progress: Bool;
+  s: PEState;
+label
+  preswitch;
+begin
+  if strm = nil then begin Result := BZ_PARAM_ERROR; Exit; end;
+  s := PEState(strm^.state);
+  if s = nil then begin Result := BZ_PARAM_ERROR; Exit; end;
+  if s^.strm <> strm then begin Result := BZ_PARAM_ERROR; Exit; end;
+
+  preswitch:
+  case s^.mode of
+    BZ_M_IDLE:
+      begin
+        Result := BZ_SEQUENCE_ERROR; Exit;
+      end;
+    BZ_M_RUNNING:
+      begin
+        if action = BZ_RUN then
+        begin
+          progress := handle_compress(strm);
+          if progress = BZ_TRUE then Result := BZ_RUN_OK else Result := BZ_PARAM_ERROR;
+          Exit;
+        end
+        else if action = BZ_FLUSH then
+        begin
+          s^.avail_in_expect := strm^.avail_in;
+          s^.mode := BZ_M_FLUSHING;
+          goto preswitch;
+        end
+        else if action = BZ_FINISH then
+        begin
+          s^.avail_in_expect := strm^.avail_in;
+          s^.mode := BZ_M_FINISHING;
+          goto preswitch;
+        end
+        else
+        begin
+          Result := BZ_PARAM_ERROR; Exit;
+        end;
+      end;
+    BZ_M_FLUSHING:
+      begin
+        if action <> BZ_FLUSH then begin Result := BZ_SEQUENCE_ERROR; Exit; end;
+        if s^.avail_in_expect <> strm^.avail_in then begin Result := BZ_SEQUENCE_ERROR; Exit; end;
+        progress := handle_compress(strm);
+        if (s^.avail_in_expect > 0) or (isempty_RL(s) = BZ_FALSE) or
+           (s^.state_out_pos < s^.numZ) then
+        begin
+          Result := BZ_FLUSH_OK; Exit;
+        end;
+        s^.mode := BZ_M_RUNNING;
+        Result := BZ_RUN_OK; Exit;
+      end;
+    BZ_M_FINISHING:
+      begin
+        if action <> BZ_FINISH then begin Result := BZ_SEQUENCE_ERROR; Exit; end;
+        if s^.avail_in_expect <> strm^.avail_in then begin Result := BZ_SEQUENCE_ERROR; Exit; end;
+        progress := handle_compress(strm);
+        if progress = BZ_FALSE then begin Result := BZ_SEQUENCE_ERROR; Exit; end;
+        if (s^.avail_in_expect > 0) or (isempty_RL(s) = BZ_FALSE) or
+           (s^.state_out_pos < s^.numZ) then
+        begin
+          Result := BZ_FINISH_OK; Exit;
+        end;
+        s^.mode := BZ_M_IDLE;
+        Result := BZ_STREAM_END; Exit;
+      end;
+  end;
+  Result := BZ_OK; { not reached }
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzDecompress  (bzlib.c)
+// ---------------------------------------------------------------------------
+function BZ2_bzDecompress(strm: Pbz_stream): Int32;
+var
+  corrupt: Bool;
+  s: PDState;
+  r: Int32;
+begin
+  if strm = nil then begin Result := BZ_PARAM_ERROR; Exit; end;
+  s := PDState(strm^.state);
+  if s = nil then begin Result := BZ_PARAM_ERROR; Exit; end;
+  if s^.strm <> strm then begin Result := BZ_PARAM_ERROR; Exit; end;
+
+  while True do
+  begin
+    if s^.state = BZ_X_IDLE then begin Result := BZ_SEQUENCE_ERROR; Exit; end;
+    if s^.state = BZ_X_OUTPUT then
+    begin
+      if s^.smallDecompress = BZ_TRUE then
+        corrupt := unRLE_obuf_to_output_SMALL(s)
+      else
+        corrupt := unRLE_obuf_to_output_FAST(s);
+      if corrupt = BZ_TRUE then begin Result := BZ_DATA_ERROR; Exit; end;
+      if (s^.nblock_used = s^.save_nblock + 1) and (s^.state_out_len = 0) then
+      begin
+        BZ_FINALISE_CRC(s^.calculatedBlockCRC);
+        if s^.calculatedBlockCRC <> s^.storedBlockCRC then
+        begin
+          Result := BZ_DATA_ERROR; Exit;
+        end;
+        s^.calculatedCombinedCRC :=
+          (s^.calculatedCombinedCRC shl 1) or
+          (s^.calculatedCombinedCRC shr 31);
+        s^.calculatedCombinedCRC := s^.calculatedCombinedCRC xor s^.calculatedBlockCRC;
+        s^.state := BZ_X_BLKHDR_1;
+      end
+      else
+      begin
+        Result := BZ_OK; Exit;
+      end;
+    end;
+    if s^.state >= BZ_X_MAGIC_1 then
+    begin
+      r := BZ2_decompress(s);
+      if r = BZ_STREAM_END then
+      begin
+        if s^.calculatedCombinedCRC <> s^.storedCombinedCRC then
+        begin
+          Result := BZ_DATA_ERROR; Exit;
+        end;
+        Result := r; Exit;
+      end;
+      if s^.state <> BZ_X_OUTPUT then begin Result := r; Exit; end;
+    end;
+  end;
+  Result := BZ_OK; { not reached }
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzBuffToBuffCompress  (bzlib.c)
+// ---------------------------------------------------------------------------
+function BZ2_bzBuffToBuffCompress(dest: PChar; destLen: PUInt32;
+    source: PChar; sourceLen: UInt32;
+    blockSize100k, verbosity, workFactor: Int32): Int32;
+var
+  strm: Tbz_stream;
+  ret: Int32;
+begin
+  if (dest = nil) or (destLen = nil) or (source = nil) or
+     (blockSize100k < 1) or (blockSize100k > 9) or
+     (verbosity < 0) or (verbosity > 4) or
+     (workFactor < 0) or (workFactor > 250) then
+  begin
+    Result := BZ_PARAM_ERROR; Exit;
+  end;
+  if workFactor = 0 then workFactor := 30;
+  FillChar(strm, SizeOf(strm), 0);
+  ret := BZ2_bzCompressInit(@strm, blockSize100k, verbosity, workFactor);
+  if ret <> BZ_OK then begin Result := ret; Exit; end;
+
+  strm.next_in   := source;
+  strm.next_out  := dest;
+  strm.avail_in  := sourceLen;
+  strm.avail_out := destLen^;
+
+  ret := BZ2_bzCompress(@strm, BZ_FINISH);
+  if ret = BZ_FINISH_OK then
+  begin
+    BZ2_bzCompressEnd(@strm);
+    Result := BZ_OUTBUFF_FULL; Exit;
+  end;
+  if ret <> BZ_STREAM_END then
+  begin
+    BZ2_bzCompressEnd(@strm);
+    Result := ret; Exit;
+  end;
+  destLen^ := destLen^ - strm.avail_out;
+  BZ2_bzCompressEnd(@strm);
+  Result := BZ_OK;
+end;
+
+// ---------------------------------------------------------------------------
+// BZ2_bzBuffToBuffDecompress  (bzlib.c)
+// ---------------------------------------------------------------------------
+function BZ2_bzBuffToBuffDecompress(dest: PChar; destLen: PUInt32;
+    source: PChar; sourceLen: UInt32;
+    small, verbosity: Int32): Int32;
+var
+  strm: Tbz_stream;
+  ret: Int32;
+begin
+  if (dest = nil) or (destLen = nil) or (source = nil) or
+     ((small <> 0) and (small <> 1)) or
+     (verbosity < 0) or (verbosity > 4) then
+  begin
+    Result := BZ_PARAM_ERROR; Exit;
+  end;
+  FillChar(strm, SizeOf(strm), 0);
+  ret := BZ2_bzDecompressInit(@strm, verbosity, small);
+  if ret <> BZ_OK then begin Result := ret; Exit; end;
+
+  strm.next_in   := source;
+  strm.next_out  := dest;
+  strm.avail_in  := sourceLen;
+  strm.avail_out := destLen^;
+
+  ret := BZ2_bzDecompress(@strm);
+  if ret = BZ_OK then
+  begin
+    if strm.avail_out > 0 then
+    begin
+      BZ2_bzDecompressEnd(@strm);
+      Result := BZ_UNEXPECTED_EOF; Exit;
+    end
+    else
+    begin
+      BZ2_bzDecompressEnd(@strm);
+      Result := BZ_OUTBUFF_FULL; Exit;
+    end;
+  end;
+  if ret <> BZ_STREAM_END then
+  begin
+    BZ2_bzDecompressEnd(@strm);
+    Result := ret; Exit;
+  end;
+  destLen^ := destLen^ - strm.avail_out;
+  BZ2_bzDecompressEnd(@strm);
   Result := BZ_OK;
 end;
 

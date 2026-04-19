@@ -52,7 +52,7 @@ pas-bzip2/
 
 ## Phase 0 — Infrastructure (prerequisite for everything)
 
-- [ ] **0.1** Create `src/pasbzip2.inc` containing the compiler directives. Included at
+- [X] **0.1** Create `src/pasbzip2.inc` containing the compiler directives. Included at
   the top of every unit with `{$I pasbzip2.inc}` — placed before the `unit` keyword so
   mode directives take effect in time:
   ```pascal
@@ -77,7 +77,7 @@ pas-bzip2/
   Note: `{$GOTO ON}` is new vs pas-core-math. It is needed *only* for `BZ2_decompress`
   in Phase 6 but is enabled project-wide for consistency.
 
-- [ ] **0.2** Create `src/pasbzip2types.pas` with the bzip2 primitive type aliases.
+- [X] **0.2** Create `src/pasbzip2types.pas` with the bzip2 primitive type aliases.
   **Rely on FPC's native types where they exist — do not redefine them.** FPC's System
   unit already provides `Int32`, `UInt32`, `Int16`, `UInt16`, `Byte`, `Char` / `AnsiChar`,
   and their pointer forms (`PInt32`, `PUInt32`, `PUInt16`, `PByte`, `PChar`). Reusing
@@ -103,14 +103,14 @@ pas-bzip2/
   substitute `LongInt`/`LongWord`/`SmallInt`/`Word`; the C spellings read 1:1 against
   the reference source during review.
 
-- [ ] **0.3** Declare the error-code and mode constants in `pasbzip2types.pas`:
+- [X] **0.3** Declare the error-code and mode constants in `pasbzip2types.pas`:
   `BZ_OK`, `BZ_RUN_OK`, `BZ_FLUSH_OK`, `BZ_FINISH_OK`, `BZ_STREAM_END`,
   `BZ_SEQUENCE_ERROR`, `BZ_PARAM_ERROR`, `BZ_MEM_ERROR`, `BZ_DATA_ERROR`,
   `BZ_DATA_ERROR_MAGIC`, `BZ_IO_ERROR`, `BZ_UNEXPECTED_EOF`, `BZ_OUTBUFF_FULL`,
   `BZ_CONFIG_ERROR`; plus `BZ_RUN`, `BZ_FLUSH`, `BZ_FINISH`; header bytes `BZ_HDR_B/Z/h/0`.
   Values must match `bzlib.h` and `bzlib_private.h` byte-for-byte.
 
-- [ ] **0.4** Declare the `bz_stream` record in `pasbzip2types.pas`:
+- [X] **0.4** Declare the `bz_stream` record in `pasbzip2types.pas`:
   ```pascal
   type
     Tbz_alloc_fn = function (opaque: Pointer; items, size: Int32): Pointer; cdecl;
@@ -139,14 +139,14 @@ pas-bzip2/
   `bzalloc`/`bzfree`, the Pascal side must invoke them using the C calling convention.
   Use `cdecl` defaults on the pair to match what a C user would pass.
 
-- [ ] **0.5** Declare `EState` and `DState` in `pasbzip2types.pas`. Both are large
+- [X] **0.5** Declare `EState` and `DState` in `pasbzip2types.pas`. Both are large
   (~7 KB and ~4 KB), field-by-field mirrors of the structs in `bzlib_private.h`. Field
   order and types must match the C source *exactly* — no reordering "for cache reasons",
   no substituting `Boolean` for `Bool`. These records are heap-allocated via the
   `bzalloc` callback; their layout is internal but must remain stable for the port's
   sanity (so you can compare field-by-field against C during debugging).
 
-- [ ] **0.6** Create `src/cbzip2.pas` — external declarations of the C reference API,
+- [X] **0.6** Create `src/cbzip2.pas` — external declarations of the C reference API,
   bound to `libbz2.so`. **Use the `cbz_` prefix for all Pascal-side names** to avoid
   collision with the Pascal port. Example:
   ```pascal
@@ -160,18 +160,18 @@ pas-bzip2/
   ```
   This unit is used by tests only and is never referenced by `pasbzip2.pas` itself.
 
-- [ ] **0.7** Create `src/tests/build.sh` based on `pas-core-math/src/tests/build.sh`.
+- [X] **0.7** Create `src/tests/build.sh` based on `pas-core-math/src/tests/build.sh`.
   Steps:
   1. Build `libbz2.so` from `../bzip2/` (compile `blocksort.c bzlib.c compress.c crctable.c decompress.c huffman.c randtable.c` with `gcc -O2 -fPIC`, link `-shared` → `src/libbz2.so`).
   2. Compile each `tests/*.pas` binary with `fpc -O3 -Fu.. -Fi.. -FE$BIN_DIR -Fl$SRC_DIR`.
   3. Clean `.ppu` / `.o` / `.compiled` artifacts afterwards.
   All binaries run with `LD_LIBRARY_PATH=src/ bin/...`.
 
-- [ ] **0.8** Copy `../bzip2/tests/sample{1,2,3}.bz2` and `sample{1,2,3}.ref` into
+- [X] **0.8** Copy `../bzip2/tests/sample{1,2,3}.bz2` and `sample{1,2,3}.ref` into
   `src/tests/vectors/` for use by `TestReferenceVectors.pas`. Do not commit the raw
   vectors if their size is a concern — a symlink is fine.
 
-- [ ] **0.9** Write a minimal `TestCRC.pas` skeleton that loads `libbz2.so`, calls
+- [X] **0.9** Write a minimal `TestCRC.pas` skeleton that loads `libbz2.so`, calls
   `cbz_bzlibVersion`, and prints it. This is the smoke test for the build system:
   until this runs, the rest of the port can't be validated.
 
@@ -179,14 +179,14 @@ pas-bzip2/
 
 ## Phase 1 — Tables (crctable.c, randtable.c)
 
-- [ ] **1.1** Port `crctable.c` to `pasbzip2tables.pas` as a unit-level
+- [X] **1.1** Port `crctable.c` to `pasbzip2tables.pas` as a unit-level
   `const BZ2_crc32Table : array[0..255] of UInt32 = (...);`.
   Copy the values *literally* from the C source — do not regenerate.
 
-- [ ] **1.2** Port `randtable.c` to `pasbzip2tables.pas` as
+- [X] **1.2** Port `randtable.c` to `pasbzip2tables.pas` as
   `const BZ2_rNums : array[0..511] of Int32 = (...);`.
 
-- [ ] **1.3** Implement CRC helper macros (`BZ_INITIALISE_CRC`, `BZ_FINALISE_CRC`,
+- [X] **1.3** Implement CRC helper macros (`BZ_INITIALISE_CRC`, `BZ_FINALISE_CRC`,
   `BZ_UPDATE_CRC`) as `inline` procedures in `pasbzip2tables.pas`:
   ```pascal
   procedure BZ_INITIALISE_CRC(out crcVar: UInt32); inline;
@@ -195,7 +195,7 @@ pas-bzip2/
   ```
   `BZ_UPDATE_CRC` must produce identical values to the C macro for every byte.
 
-- [ ] **1.4** `TestCRC.pas`: for a sequence of buffers of varying lengths (empty, 1 B,
+- [X] **1.4** `TestCRC.pas`: for a sequence of buffers of varying lengths (empty, 1 B,
   random 1 KB, random 1 MB, a buffer of all-zero 1 MB), compute the CRC using the
   Pascal implementation and the C reference side-by-side. Any mismatch is a bug in
   Phase 1 that must be fixed before continuing.
@@ -207,14 +207,14 @@ pas-bzip2/
 Self-contained. The three functions have no dependencies on `EState`/`DState`, only on
 `Int32`/`UChar` arrays passed by pointer.
 
-- [ ] **2.1** Port `BZ2_hbMakeCodeLengths(len, freq, alphaSize, maxLen)` to
+- [X] **2.1** Port `BZ2_hbMakeCodeLengths(len, freq, alphaSize, maxLen)` to
   `pasbzip2huffman.pas`. Uses a priority-queue / heap construction over `freq`.
 
-- [ ] **2.2** Port `BZ2_hbAssignCodes(code, length, minLen, maxLen, alphaSize)`.
+- [X] **2.2** Port `BZ2_hbAssignCodes(code, length, minLen, maxLen, alphaSize)`.
 
-- [ ] **2.3** Port `BZ2_hbCreateDecodeTables(limit, base, perm, length, minLen, maxLen, alphaSize)`.
+- [X] **2.3** Port `BZ2_hbCreateDecodeTables(limit, base, perm, length, minLen, maxLen, alphaSize)`.
 
-- [ ] **2.4** `TestHuffman.pas`: call Pascal and C versions with the same inputs
+- [X] **2.4** `TestHuffman.pas`: call Pascal and C versions with the same inputs
   (hand-crafted small alphabets with controlled frequencies, plus random larger ones);
   compare outputs byte-for-byte. Required to pass before Phase 4.
 
@@ -222,24 +222,24 @@ Self-contained. The three functions have no dependencies on `EState`/`DState`, o
 
 ## Phase 3 — bzlib scaffolding + bit stream writer
 
-- [ ] **3.1** Port `default_bzalloc` and `default_bzfree` (from `bzlib.c`) as
+- [X] **3.1** Port `default_bzalloc` and `default_bzfree` (from `bzlib.c`) as
   `cdecl` procedures in `pasbzip2.pas`. They call `GetMem` / `FreeMem` respectively.
 
-- [ ] **3.2** Port `BZ2_bzCompressInit(strm, blockSize100k, verbosity, workFactor)` —
+- [X] **3.2** Port `BZ2_bzCompressInit(strm, blockSize100k, verbosity, workFactor)` —
   validates parameters, installs default alloc callbacks if nil, allocates `EState` and
   its arrays (`arr1`, `arr2`, `ftab`), sets up pointer aliases (`ptr`, `block`, `mtfv`,
   `zbits` — see pitfall #3 below), initialises the state machine.
 
-- [ ] **3.3** Port `BZ2_bzCompressEnd(strm)`.
+- [X] **3.3** Port `BZ2_bzCompressEnd(strm)`.
 
-- [ ] **3.4** Port `BZ2_bzDecompressInit(strm, verbosity, small)` and
+- [X] **3.4** Port `BZ2_bzDecompressInit(strm, verbosity, small)` and
   `BZ2_bzDecompressEnd(strm)`. Same pattern.
 
-- [ ] **3.5** Port `BZ2_bsInitWrite`, `bsFinishWrite`, `bsW`, `bsPutUInt32`, `bsPutUChar`
+- [X] **3.5** Port `BZ2_bsInitWrite`, `bsFinishWrite`, `bsW`, `bsPutUInt32`, `bsPutUChar`
   (compress.c, lines 37–104) into `pasbzip2compress.pas`. These are small — 5 to 15
   lines each. Mark all `inline`.
 
-- [ ] **3.6** Port `BZ2_bz__AssertH__fail` in `pasbzip2.pas`. It prints a diagnostic to
+- [X] **3.6** Port `BZ2_bz__AssertH__fail` in `pasbzip2.pas`. It prints a diagnostic to
   `stderr` and calls `Halt(3)`. In debug builds, `AssertH(cond, errcode)` should log
   the file/line of the assertion — a tiny inline wrapper is fine.
 
@@ -250,20 +250,20 @@ Self-contained. The three functions have no dependencies on `EState`/`DState`, o
 This phase produces valid bzip2-compressed output. **Bit-exactness vs the C reference is
 the acceptance criterion** — every bit of every output block must match.
 
-- [ ] **4.1** Port `makeMaps_e(s)` — builds `unseqToSeq` / `inUse` mapping.
+- [X] **4.1** Port `makeMaps_e(s)` — builds `unseqToSeq` / `inUse` mapping.
 
-- [ ] **4.2** Port `generateMTFValues(s)` — Move-to-Front transform of block output.
+- [X] **4.2** Port `generateMTFValues(s)` — Move-to-Front transform of block output.
   ~110 lines; tight inner loops; careful with `UInt16` array bounds.
 
-- [ ] **4.3** Port `sendMTFValues(s)` — selector assignment, Huffman code-length
+- [X] **4.3** Port `sendMTFValues(s)` — selector assignment, Huffman code-length
   iteration (4 rounds), bit stream emission. ~360 lines and the most algorithm-dense
   function in `compress.c`. Port function-shaped helpers (Huffman code length setup)
   as-is; do not factor differently.
 
-- [ ] **4.4** Port `BZ2_compressBlock(s, is_last_block)` — wires together `BZ2_blockSort`
+- [X] **4.4** Port `BZ2_compressBlock(s, is_last_block)` — wires together `BZ2_blockSort`
   (coming in Phase 5), `generateMTFValues`, `sendMTFValues`, block header/CRC output.
 
-- [ ] **4.5** Blocked until Phase 5 completes. Use a stub `BZ2_blockSort` that calls the
+- [X] **4.5** Blocked until Phase 5 completes. Use a stub `BZ2_blockSort` that calls the
   C version through `cbzip2.pas` during Phase 4 development so `BZ2_compressBlock` can
   be exercised while the real blocksort is being ported.
 
@@ -273,23 +273,23 @@ the acceptance criterion** — every bit of every output block must match.
 
 The Burrows–Wheeler transform. Any deviation changes the compressed output.
 
-- [ ] **5.1** Port `fallbackSimpleSort`, `fallbackQSort3`, `fallbackSort` (lines 30–344).
+- [X] **5.1** Port `fallbackSimpleSort`, `fallbackQSort3`, `fallbackSort` (lines 30–344).
   Used for pathological inputs. Self-contained.
 
-- [ ] **5.2** Port `mainGtU(i1, i2, block, quadrant, nblock, budget)` — the lexicographic
+- [X] **5.2** Port `mainGtU(i1, i2, block, quadrant, nblock, budget)` — the lexicographic
   comparator that drives the main sort. Hot-path function.
 
-- [ ] **5.3** Port `mainSimpleSort` and `mainQSort3` (lines 484–745).
+- [X] **5.3** Port `mainSimpleSort` and `mainQSort3` (lines 484–745).
 
-- [ ] **5.4** Port `mainSort` (lines 750–1030). Large function; several nested loops.
+- [X] **5.4** Port `mainSort` (lines 750–1030). Large function; several nested loops.
 
-- [ ] **5.5** Port `BZ2_blockSort(s)` — the top-level entry point (lines 1031–end).
+- [X] **5.5** Port `BZ2_blockSort(s)` — the top-level entry point (lines 1031–end).
   Chooses between main sort and fallback based on `workFactor`.
 
-- [ ] **5.6** Replace the Phase 4.5 stub with the real Pascal `BZ2_blockSort`. Remove the
+- [X] **5.6** Replace the Phase 4.5 stub with the real Pascal `BZ2_blockSort`. Remove the
   temporary C dependency from `pasbzip2compress.pas`.
 
-- [ ] **5.7** `TestBitExactness.pas`: compress a range of inputs (small literal strings,
+- [X] **5.7** `TestBitExactness.pas`: compress a range of inputs (small literal strings,
   random 1 KB / 100 KB / 5 MB buffers, highly repetitive inputs, worst-case inputs that
   exhaust `workFactor`) with both the Pascal library and `libbz2.so`. Diff the
   compressed byte streams. **Any mismatch halts the phase.**
@@ -300,11 +300,11 @@ The Burrows–Wheeler transform. Any deviation changes the compressed output.
 
 This is the part that requires `{$GOTO ON}`.
 
-- [ ] **6.1** Port `makeMaps_d(s)` (lines 26–85 of `decompress.c`). Small helper.
+- [X] **6.1** Port `makeMaps_d(s)` (lines 26–85 of `decompress.c`). Small helper.
 
-- [ ] **6.2** Port `BZ2_indexIntoF(indx, cftab)` (prototype in `bzlib_private.h`).
+- [X] **6.2** Port `BZ2_indexIntoF(indx, cftab)` (prototype in `bzlib_private.h`).
 
-- [ ] **6.3** Port `BZ2_decompress(s)` — the big one. **Strategy:**
+- [X] **6.3** Port `BZ2_decompress(s)` — the big one. **Strategy:**
   - Port **line-by-line**. Do not restructure the control flow.
   - Each C `case BZ_X_FOO:` becomes a Pascal **label** `BZ_X_FOO:` (the Pascal-side case
     constants are defined in `pasbzip2types.pas` as integer literals so their textual
@@ -330,13 +330,13 @@ This is the part that requires `{$GOTO ON}`.
   - The C `case BZ_X_OUTPUT: s->state = BZ_X_OUTPUT; if (s->smallDecompress) ...`
     output dispatch pattern maps directly.
 
-- [ ] **6.4** **Do not introduce a helper that "absorbs" `GET_BITS` into a function with
+- [X] **6.4** **Do not introduce a helper that "absorbs" `GET_BITS` into a function with
   normal Pascal control flow.** The reason: `GET_BITS` needs to *both* suspend the whole
   function on input exhaustion *and* continue sequentially on success. A normal helper
   can only do one or the other. The macro-style expansion is faithful to the C source
   and is the whole point of enabling `{$GOTO ON}`.
 
-- [ ] **6.5** `TestReferenceVectors.pas`: for each of `sample{1,2,3}.bz2`, decompress
+- [X] **6.5** `TestReferenceVectors.pas`: for each of `sample{1,2,3}.bz2`, decompress
   using `BZ2_bzBuffToBuffDecompress` and compare the output to `sample{1,2,3}.ref`
   byte-for-byte. Must pass before moving to Phase 7.
 
@@ -346,14 +346,14 @@ This is the part that requires `{$GOTO ON}`.
 
 The streaming compressor/decompressor driver + stdio wrappers.
 
-- [ ] **7.1** Port `BZ2_bzCompress(strm, action)` — the main streaming entry. This
+- [X] **7.1** Port `BZ2_bzCompress(strm, action)` — the main streaming entry. This
   is a state machine over `BZ_M_RUNNING` / `BZ_M_FLUSHING` / `BZ_M_FINISHING` with
   `BZ_S_INPUT` / `BZ_S_OUTPUT` sub-states. Calls into `BZ2_compressBlock` when a
   block fills up.
 
-- [ ] **7.2** Port `BZ2_bzDecompress(strm)`. Calls `BZ2_decompress` repeatedly.
+- [X] **7.2** Port `BZ2_bzDecompress(strm)`. Calls `BZ2_decompress` repeatedly.
 
-- [ ] **7.3** Port `BZ2_bzBuffToBuffCompress` and `BZ2_bzBuffToBuffDecompress` — the
+- [X] **7.3** Port `BZ2_bzBuffToBuffCompress` and `BZ2_bzBuffToBuffDecompress` — the
   one-shot in-memory wrappers. Used by most of the test harness.
 
 - [ ] **7.4** Port the stdio wrappers: `BZ2_bzWriteOpen`, `BZ2_bzWrite`,
@@ -366,7 +366,7 @@ The streaming compressor/decompressor driver + stdio wrappers.
 - [ ] **7.5** Port `BZ2_bzopen`, `BZ2_bzdopen`, `BZ2_bzread`, `BZ2_bzwrite`, `BZ2_bzflush`,
   `BZ2_bzclose`, `BZ2_bzerror` (the "zlib-compat" helpers).
 
-- [ ] **7.6** Port `BZ2_bzlibVersion` — returns the version string. Match the C exactly:
+- [X] **7.6** Port `BZ2_bzlibVersion` — returns the version string. Match the C exactly:
   `'1.1.0, 6-Sept-2010'`.
 
 ---
