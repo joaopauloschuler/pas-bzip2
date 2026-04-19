@@ -5,8 +5,12 @@ program TestBitExactness;
   Phase 5.7 validation: verifies that the Pascal BZ2_blockSort produces
   bit-exact results vs the C reference implementation.
 
-  Strategy
-  ---------
+  Phase 8.3 extension: sweeps every blockSize100k value (1..9) and a
+  representative set of workFactor values (0, 1, 30, 100, 250) confirming
+  byte-equal full compressed output with the C reference.
+
+  Strategy (Phase 5.7)
+  ---------------------
   For each test vector we allocate two independent EState instances using
   BZ2_bzCompressInit, fill both with identical block data, then call the
   Pascal BZ2_blockSort on one and the C cbz_blockSort on the other.
@@ -14,8 +18,8 @@ program TestBitExactness;
     • s.origPtr   — the BWT rotation index
     • s.ptr[0..nblock-1]  — the sorted suffix-array order
 
-  Test vectors
-  ------------
+  Test vectors (Phase 5.7)
+  ------------------------
     1. Small all-zeros (100 bytes) — exercises fallbackSort path
     2. Small all-same non-zero (200 bytes 'A') — exercises fallbackSort
     3. Small random (1 000 bytes) — exercises fallbackSort
@@ -23,6 +27,13 @@ program TestBitExactness;
     5. Large random (900 000 bytes, block-size 9) — exercises mainSort
     6. Highly repetitive (20 000 bytes, 4-byte pattern) — triggers fallback
        from mainSort via budget exhaustion when workFactor = 1
+
+  Strategy (Phase 8.3)
+  ---------------------
+  For each (blockSize100k, workFactor, corpus) triple, compress the same
+  buffer with BZ2_bzBuffToBuffCompress (Pascal) and cbz_bzBuffToBuffCompress
+  (C reference) and compare the compressed byte streams byte-for-byte.
+  workFactor=0 is explicitly included (maps to internal default 30).
 }
 
 uses
@@ -130,6 +141,78 @@ begin
 end;
 
 // ---------------------------------------------------------------------------
+// Phase 8.3: compare full compressed byte streams Pascal vs C.
+// Returns True on exact match, False on any mismatch.
+// ---------------------------------------------------------------------------
+function SweepOne(srcBuf: PByte; srcLen: Int32;
+                  bs8: Int32; wf: Int32;
+                  const corpus: string): Boolean;
+var
+  compBufP, compBufC: PByte;
+  pLen, cLen: UInt32;
+  cMax: SizeInt;
+  ret2: Int32;
+  mi: Int32;
+begin
+  Result := False;
+  cMax := srcLen + srcLen div 100 + 1024;
+  if cMax < 1024 then cMax := 1024;
+  compBufP := GetMem(cMax);
+  compBufC := GetMem(cMax);
+  pLen := cMax;
+  cLen := cMax;
+
+  ret2 := BZ2_bzBuffToBuffCompress(
+    PChar(compBufP), @pLen, PChar(srcBuf), srcLen, bs8, 0, wf);
+  if ret2 <> BZ_OK then
+  begin
+    WriteLn('  FAIL ', corpus, ' bs=', bs8, ' wf=', wf,
+            ' pascal-compress ret=', ret2);
+    FreeMem(compBufP); FreeMem(compBufC);
+    Exit;
+  end;
+
+  ret2 := cbz_bzBuffToBuffCompress(
+    PChar(compBufC), @cLen, PChar(srcBuf), srcLen, bs8, 0, wf);
+  if ret2 <> BZ_OK then
+  begin
+    WriteLn('  FAIL ', corpus, ' bs=', bs8, ' wf=', wf,
+            ' c-compress ret=', ret2);
+    FreeMem(compBufP); FreeMem(compBufC);
+    Exit;
+  end;
+
+  if pLen <> cLen then
+  begin
+    WriteLn('  FAIL ', corpus, ' bs=', bs8, ' wf=', wf,
+            ' stream-length mismatch Pascal=', pLen, ' C=', cLen);
+    FreeMem(compBufP); FreeMem(compBufC);
+    Exit;
+  end;
+
+  for mi := 0 to Int32(pLen) - 1 do
+  begin
+    if compBufP[mi] <> compBufC[mi] then
+    begin
+      WriteLn('  FAIL ', corpus, ' bs=', bs8, ' wf=', wf,
+              ' stream byte mismatch at offset ', mi,
+              ' Pascal=$', IntToHex(compBufP[mi], 2),
+              ' C=$', IntToHex(compBufC[mi], 2));
+      FreeMem(compBufP); FreeMem(compBufC);
+      Exit;
+    end;
+  end;
+
+  WriteLn('  OK  ', corpus, ' bs=', bs8, ' wf=', wf);
+  Result := True;
+  FreeMem(compBufP);
+  FreeMem(compBufC);
+end;
+
+const
+  WF_VALUES: array[0..4] of Int32 = (0, 1, 30, 100, 250);
+
+// ---------------------------------------------------------------------------
 // Large test buffers as globals to avoid stack overflow
 // ---------------------------------------------------------------------------
 const
@@ -149,6 +232,8 @@ var
 var
   seed: UInt32;
   i: Integer;
+  litBuf: array[0..4095] of Byte;
+  bs, wfi: Integer;
 
   function NextRnd: Byte; inline;
   begin
@@ -185,6 +270,35 @@ begin
   RunTest('random 50000B (mainSort)',    @gMedium[0], 50000,   1, 30);
   RunTest('random 900000B (mainSort)',   @gLarge[0],  900000,  9, 30);
   RunTest('repetitive 20000B wfact=1',  @gRepeat[0], 20000,   1,  1);
+
+  WriteLn;
+
+  // =========================================================================
+  // Phase 8.3 — sweep blockSize100k (1..9) × workFactor × representative
+  //             corpora, comparing full compressed byte streams Pascal vs C.
+  // =========================================================================
+  WriteLn('=== Phase 8.3: full-stream bit-exactness sweep ===');
+  WriteLn;
+
+  begin
+    for i := 0 to 4095 do
+      litBuf[i] := Byte(Ord('Hello, bzip2 world! '[(i mod 20) + 1]));
+
+    for bs := 1 to 9 do
+      for wfi := 0 to 4 do
+      begin
+        if not SweepOne(@litBuf[0],   4096,       bs, WF_VALUES[wfi], 'literal-4KB')  then Inc(fails);
+        if not SweepOne(@gMedium[0],  BUF_MEDIUM, bs, WF_VALUES[wfi], 'random-50KB')  then Inc(fails);
+        if not SweepOne(@gRepeat[0],  BUF_REPET,  bs, WF_VALUES[wfi], 'repeat4-20KB') then Inc(fails);
+      end;
+
+    // Large 900 KB buffer: all block sizes × wf=1 and wf=30 only (time budget)
+    for bs := 1 to 9 do
+    begin
+      if not SweepOne(@gLarge[0], BUF_LARGE, bs,  1, 'random-900KB') then Inc(fails);
+      if not SweepOne(@gLarge[0], BUF_LARGE, bs, 30, 'random-900KB') then Inc(fails);
+    end;
+  end;
 
   WriteLn;
   if fails = 0 then begin

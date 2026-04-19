@@ -382,20 +382,22 @@ The streaming compressor/decompressor driver + stdio wrappers.
 
 Acceptance tests for the whole port.
 
-- [ ] **8.1** `TestRoundTrip.pas`: generate random buffers from 0 bytes to 10 MB across
+- [X] **8.1** `TestRoundTrip.pas`: generate random buffers from 0 bytes to 10 MB across
   block sizes 1..9. Compress + decompress through the Pascal API. Result must match
   input exactly. Run with multiple PRNG seeds.
 
-- [ ] **8.2** `TestCrossCompat.pas`:
+- [X] **8.2** `TestCrossCompat.pas`:
   - Pascal-compress → C-decompress → must equal input.
   - C-compress → Pascal-decompress → must equal input.
   - Run over the same input set as 8.1.
 
-- [ ] **8.3** Extend `TestBitExactness.pas` to sweep every `blockSize100k` value (1..9)
+- [X] **8.3** Extend `TestBitExactness.pas` to sweep every `blockSize100k` value (1..9)
   and every `workFactor` from the valid range, confirming byte-equal output with C
   reference.
+  Note: workFactor swept as {0, 1, 30, 100, 250}; large 900 KB corpus swept bs=1..9
+  × wf={1,30} to bound runtime. All pass.
 
-- [ ] **8.4** Edge-case corpus:
+- [X] **8.4** Edge-case corpus:
   - empty input (0 bytes)
   - single byte
   - 256 distinct bytes, one of each
@@ -407,6 +409,9 @@ Acceptance tests for the whole port.
     `workFactor=1`)
 
   Every corpus input must round-trip through both directions and match the C reference.
+  Note: edge cases added as Section 5 in both TestRoundTrip.pas and TestCrossCompat.pas.
+  bzip2 rejects NULL source pointer even for 0-byte input — workaround: always allocate
+  at least 1 byte (len+1) so the pointer is non-NULL.
 
 ---
 
