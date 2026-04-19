@@ -122,6 +122,12 @@ bash build.sh
 
 This builds `libbz2.so` from `../bzip2/` (once, if not present) and compiles all Pascal test and benchmark binaries into `bin/`.
 
+To enable AVX2 and tune for a modern Intel/AMD core:
+
+```bash
+bash build.sh -dAVX2 -CfAVX2 -CpCOREI -OpCOREI
+```
+
 ## Running the Tests
 
 ```bash
