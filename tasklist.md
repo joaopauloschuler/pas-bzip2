@@ -457,11 +457,14 @@ Only begin once everything above is green.
 Do not touch this phase until every row in Phase 8 passes. Changes here must preserve
 bit-exactness.
 
+Before trying any fix, try to use some profiling tool to discover where the time is being waisted.
+In FPC, functions with asm content can not be inlined.
+
+Use "-dAVX2 -CfAVX2 -CpCOREI -OpCOREI" to compile.
+
 - [ ] **11.1** Profile with `perf record` and identify the top three hot functions.
 - [ ] **11.2** Evaluate inlining opportunities for `bsW`, `BZ_UPDATE_CRC`,
   `BZ_GET_FAST` paths.
-- [ ] **11.3** Consider `{$FPUTYPE SSE2}` and `-Cp<arch>` tuning (`-CpCOREI`, etc.) as
-  used in pas-core-math.
 
 
 ## Per-function porting checklist
