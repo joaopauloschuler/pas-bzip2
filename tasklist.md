@@ -436,34 +436,33 @@ Acceptance tests for the whole port.
 
 ---
 
-## Phase 10 — Performance optimization (enter only after Phase 9)
+## Phase 10 — CLI tool (bzip2.c, 2029 lines)
+
+Only begin once everything above is green.
+
+- [ ] **10.1** Port `bzip2.c` to `src/bzip2.pas` as a program that links in
+  `pasbzip2.pas`. Mimic the CLI flags, exit codes, and stderr messages of the
+  reference `bzip2` binary.
+
+- [ ] **10.2** Integration test: run `bin/bzip2 -9 sample.txt && bzip2 -d sample.txt.bz2`
+  and compare the recovered file to the original for a corpus of inputs.
+
+- [ ] **10.3** Exit-code parity with reference: feed corrupted inputs and confirm the
+  Pascal CLI returns the same exit codes as the C CLI.
+
+---
+
+## Phase 11 — ON HOLD - Performance optimization (enter only after Phase 9)  — **very last task**
 
 Do not touch this phase until every row in Phase 8 passes. Changes here must preserve
 bit-exactness.
 
-- [ ] **10.1** Profile with `perf record` and identify the top three hot functions.
-- [ ] **10.2** Evaluate inlining opportunities for `bsW`, `BZ_UPDATE_CRC`,
+- [ ] **11.1** Profile with `perf record` and identify the top three hot functions.
+- [ ] **11.2** Evaluate inlining opportunities for `bsW`, `BZ_UPDATE_CRC`,
   `BZ_GET_FAST` paths.
-- [ ] **10.3** Consider `{$FPUTYPE SSE2}` and `-Cp<arch>` tuning (`-CpCOREI`, etc.) as
+- [ ] **11.3** Consider `{$FPUTYPE SSE2}` and `-Cp<arch>` tuning (`-CpCOREI`, etc.) as
   used in pas-core-math.
 
----
-
-## Phase 11 — CLI tool (bzip2.c, 2029 lines) — **very last task**
-
-Only begin once everything above is green.
-
-- [ ] **11.1** Port `bzip2.c` to `src/bzip2.pas` as a program that links in
-  `pasbzip2.pas`. Mimic the CLI flags, exit codes, and stderr messages of the
-  reference `bzip2` binary.
-
-- [ ] **11.2** Integration test: run `bin/bzip2 -9 sample.txt && bzip2 -d sample.txt.bz2`
-  and compare the recovered file to the original for a corpus of inputs.
-
-- [ ] **11.3** Exit-code parity with reference: feed corrupted inputs and confirm the
-  Pascal CLI returns the same exit codes as the C CLI.
-
----
 
 ## Per-function porting checklist
 
