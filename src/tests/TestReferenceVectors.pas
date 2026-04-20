@@ -2,7 +2,7 @@
 program TestReferenceVectors;
 
 {
-  Phase 7 validation: decompresses sample{1,2,3}.bz2 using the Pascal
+  Phase 7 validation: decompresses sample1/2/3.bz2 using the Pascal
   BZ2_bzBuffToBuffDecompress and verifies byte-by-byte against the
   corresponding .ref files.
 }

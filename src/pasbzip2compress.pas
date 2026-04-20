@@ -155,6 +155,7 @@ var
   ryy_j       : PUChar;
   rll_i       : UChar;
 begin
+  FillChar(yy, SizeOf(yy), 0);
   ptr   := s^.ptr;
   block := s^.block;
   mtfv  := s^.mtfv;
@@ -313,6 +314,9 @@ var
   nPart, remF, tFreq, aFreq : Int32;
 begin
   mtfv := s^.mtfv;
+  FillChar(cost, SizeOf(cost), 0);
+  FillChar(fave, SizeOf(fave), 0);
+  FillChar(pos,  SizeOf(pos),  0);
 
   if s^.verbosity >= 3 then
     WriteLn(StdErr, Format('      %d in block, %d after MTF & 1-2 coding, %d+2 syms in use',

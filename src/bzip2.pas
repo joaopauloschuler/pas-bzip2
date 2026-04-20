@@ -805,6 +805,7 @@ var
   i      : cint;
   statBuf: Stat;
 begin
+  FillChar(statBuf, SizeOf(statBuf), 0);
   i := fpLStat(name, statBuf);
   if i <> 0 then begin Result := BZ_TRUE; Exit; end;
   if fpS_ISREG(statBuf.st_mode) then begin Result := BZ_FALSE; Exit; end;
@@ -820,6 +821,7 @@ var
   i      : cint;
   statBuf: Stat;
 begin
+  FillChar(statBuf, SizeOf(statBuf), 0);
   i := fpLStat(name, statBuf);
   if i <> 0 then begin Result := 0; Exit; end;
   Result := Int32(statBuf.st_nlink) - 1;
@@ -899,6 +901,8 @@ var
   statBuf      : Stat;
   sLink        : AnsiString;
 begin
+  inStr  := THandle(-1);
+  outStr := THandle(-1);
   deleteOutputOnInterrupt := BZ_FALSE;
 
   if (name = nil) and (srcMode <> SM_I2O) then
@@ -1099,6 +1103,8 @@ var
   statBuf        : Stat;
   sLink          : AnsiString;
 begin
+  inStr  := THandle(-1);
+  outStr := THandle(-1);
   deleteOutputOnInterrupt := BZ_FALSE;
 
   if (name = nil) and (srcMode <> SM_I2O) then
@@ -1310,6 +1316,7 @@ var
   allOK  : Bool;
   statBuf: Stat;
 begin
+  inStr := THandle(-1);
   deleteOutputOnInterrupt := BZ_FALSE;
 
   if (name = nil) and (srcMode <> SM_I2O) then
@@ -1570,11 +1577,13 @@ begin
   tmpName        := @tmpNameBuf[0];
   progNameReally := @progNameReallyBuf[0];
 
-  { Sanity check sizes }
-  if (SizeOf(Int32) <> 4) or (SizeOf(UInt32) <> 4) or
-     (SizeOf(Int16) <> 2) or (SizeOf(UInt16) <> 2) or
-     (SizeOf(AnsiChar) <> 1) or (SizeOf(UChar) <> 1) then
-    configError;
+  { Sanity check sizes (compile-time assertions — catches wrong platform at build time) }
+  {$IF SizeOf(Int32) <> 4}    {$ERROR 'Int32 must be 4 bytes'}    {$ENDIF}
+  {$IF SizeOf(UInt32) <> 4}   {$ERROR 'UInt32 must be 4 bytes'}   {$ENDIF}
+  {$IF SizeOf(Int16) <> 2}    {$ERROR 'Int16 must be 2 bytes'}    {$ENDIF}
+  {$IF SizeOf(UInt16) <> 2}   {$ERROR 'UInt16 must be 2 bytes'}   {$ENDIF}
+  {$IF SizeOf(AnsiChar) <> 1} {$ERROR 'AnsiChar must be 1 byte'}  {$ENDIF}
+  {$IF SizeOf(UChar) <> 1}    {$ERROR 'UChar must be 1 byte'}     {$ENDIF}
 
   { Initialise }
   outputHandleJustInCase  := THandle(-1);

@@ -595,6 +595,7 @@ var
   { pointer-reversal temp }
   pr_tmp    : Int32;
 begin
+  FillChar(pos, SizeOf(pos), 0);
   { ---- Initialise save area on first call ---- }
   if s^.state = BZ_X_MAGIC_1 then
   begin

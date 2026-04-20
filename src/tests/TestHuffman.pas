@@ -210,6 +210,7 @@ begin
       1: seed := $C0FFEE42;
       2: seed := $12345678;
       3: seed := $AABBCCDD;
+      else seed := 0;
     end;
     for i := 0 to BZ_MAX_ALPHA_SIZE - 1 do
     begin

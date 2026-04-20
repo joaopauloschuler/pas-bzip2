@@ -4,7 +4,7 @@ program Benchmark;
 {
   Phase 9.1 — MB/s throughput benchmark: Pascal vs C libbz2.
 
-  For each of {compress, decompress} x {blockSize100k: 1, 5, 9} x 3 corpora:
+  For each of (compress, decompress) x (blockSize100k: 1, 5, 9) x 3 corpora:
     - text   : 1 MB cycling printable ASCII (high compressibility)
     - binary : 1 MB pseudo-random bytes    (low compressibility)
     - ac     : ~1 MB bzip2-compressed random data (already-compressed; resists re-compression)

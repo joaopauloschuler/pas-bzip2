@@ -599,15 +599,21 @@ Use "-dAVX2 -CfAVX2 -CpCOREI -OpCOREI" to compile.
 
 Apply to every function before marking it done:
 
-- [ ] Signature matches the C source (same argument order, same types)
-- [ ] Field names inside `EState`/`DState` accesses match C exactly
-- [ ] No substitution of Pascal `Boolean` for `Bool` (`Byte`)
-- [ ] `static` C locals moved to unit-level `var` (thread-unsafe in C too — OK)
-- [ ] Static `const` arrays moved to unit-level `const`, values unchanged
-- [ ] Macros expanded inline OR replaced with `inline` procedures of identical semantics
-- [ ] `AssertH` retained at every call site — do not delete for brevity
-- [ ] Compiled with `-O3` clean (no warnings in the new code)
-- [ ] A test in `tests/` exercises the function (directly or through `BZ2_bz*` API)
+- [X] Signature matches the C source (same argument order, same types)
+- [X] Field names inside `EState`/`DState` accesses match C exactly
+- [X] No substitution of Pascal `Boolean` for `Bool` (`Byte`)
+- [X] `static` C locals moved to unit-level `var` (thread-unsafe in C too — OK)
+- [X] Static `const` arrays moved to unit-level `const`, values unchanged
+- [X] Macros expanded inline OR replaced with `inline` procedures of identical semantics
+- [X] `AssertH` retained at every call site — do not delete for brevity
+- [X] Compiled with `-O3` clean (no warnings in the new code)
+      Note: validated after Phase 11.6 — fixed 13 warnings across pasbzip2compress.pas,
+      pasbzip2decompress.pas, bzip2.pas, and 4 test files. Fixes: FillChar init for local
+      arrays (yy, cost, fave, pos), explicit THandle(-1) init for inStr/outStr, FillChar for
+      statBuf before fpLStat, compile-time {$IF} size assertions replacing unreachable runtime
+      check, else-arm in TestHuffman seed case, and nested-brace comment cleanup in
+      TestReferenceVectors.pas / Benchmark.pas.
+- [X] A test in `tests/` exercises the function (directly or through `BZ2_bz*` API)
 
 ---
 
