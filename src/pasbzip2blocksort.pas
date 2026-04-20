@@ -311,8 +311,15 @@ end;
 // Main sort helpers — O(N^2 log N), faster for non-repetitive blocks
 // ---------------------------------------------------------------------------
 
+// mainGtU — suffix comparison for BZ2_blockSort.
+// NOT inline: with 6 register parameters (all fit in x86_64 SysV %rdi..%r9),
+// FPC keeps block (%rdx) and quadrant (%rcx) in registers throughout the
+// function body. The inlined version caused FPC to spill both pointers to the
+// stack (reloaded 2× per byte comparison) because mainSimpleSort had too many
+// live variables. The function-call overhead (~14 cycles) is outweighed by the
+// savings on comparisons longer than ~5 bytes.
 function mainGtU(i1, i2: UInt32; block: PUChar; quadrant: PUInt16;
-                 nblock: UInt32; budget: PInt32): Bool; inline;
+                 nblock: UInt32; budget: PInt32): Bool;
 var
   k: Int32;
   c1, c2: UChar;

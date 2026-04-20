@@ -569,6 +569,34 @@ Use "-dAVX2 -CfAVX2 -CpCOREI -OpCOREI" to compile.
   version; the benefit of this optimisation is real but small on this micro-architecture.
   Code is cleaner (50 lines → 15 lines) and the logic is easier to maintain.
 
+- [X] **11.6** Remove `inline` from `mainGtU` so FPC keeps `block`/`quadrant` in CPU registers.
+  Root cause: `mainGtU` was declared `inline`, causing FPC to expand it 3× inside
+  `mainSimpleSort` (once per insertion-sort copy). With 3 inlined copies plus the outer
+  shell-sort loop, `mainSimpleSort` grew to ~1535 assembly lines — exhausting FPC's
+  register budget. FPC then spilled the `block` and `quadrant` parameters to the stack
+  (`-16(%rbp)` and `-24(%rbp)`) and reloaded them on every byte comparison — 2 stack
+  loads per byte × 12 bytes unrolled = 24 extra stack loads per `mainGtU` call.
+  Investigation tried first: (a) replacing 12 individual byte comparisons with 3 ×
+  four-byte bswap comparisons (reduces branch count but FPC doesn't emit `bswap`
+  instruction — generates 8 shift/OR instructions instead, not a net win); (b)
+  extracting the inner while loop into `mainInsertion` helper — FPC still spilled
+  because the inlined bswap code kept register pressure high.
+  Fix applied: removed `inline` from `mainGtU`. With exactly 6 parameters (i1, i2,
+  block, quadrant, nblock, budget), all 6 map to x86_64 SysV call registers
+  (%rdi/%rsi/%rdx/%rcx/%r8/%r9). FPC confirmed (via `-al` assembly listing):
+  `block located in register rdx`, `quadrant located in register rcx` — no stack
+  spill throughout the function body. Function call overhead (~14 cycles) is
+  outweighed by savings on comparisons deeper than ~5 bytes; text data has many
+  shared-prefix suffixes so comparisons are typically much deeper than 5 bytes.
+  FPC assembly metrics: lines 6228 → 4961 (20% smaller), byte-load instructions
+  349 → 142 (59% fewer).
+  All tests pass (TestBitExactness, TestRoundTrip, TestCrossCompat, TestReferenceVectors).
+  Result: average ratio **~1.52× → ~1.45× slower** (two independent runs: 1.46× and
+  1.44×). Largest wins: compress/text/bs1 6.3→7.1 MB/s (+13%), compress/text/bs9
+  4.8→5.8 MB/s (+21%). Binary/ac compress rows hold steady or improve slightly.
+  Decompress rows unchanged (mainGtU is compress-only; decompress path is unaffected).
+  GlobalSink = 0 confirms bit-exactness preserved across all test suites.
+
 Apply to every function before marking it done:
 
 - [ ] Signature matches the C source (same argument order, same types)
@@ -838,6 +866,52 @@ Notes vs Phase 11.4:
 - FPC's out-of-order pipeline partially hides the aliasing-reload penalty of the old code;
   improvement is real but small on this µarch. Code is cleaner: 50 lines → 15 lines.
 - GlobalSink = 0 confirms bit-exactness preserved across all tests.
+
+---
+
+## Benchmark results — Phase 11.6 (after removing `inline` from `mainGtU`)
+
+Measured 2026-04-20 on x86_64 Linux, FPC 3.2.2,
+`-O3 -dAVX2 -CfAVX2 -CpCOREI -OpCOREI`.
+Optimisation applied: removed `inline` keyword from `mainGtU`. With exactly 6
+parameters, all 6 map to x86_64 SysV call registers; FPC now keeps `block` in
+`%rdx` and `quadrant` in `%rcx` throughout the function body (confirmed via `-al`
+assembly listing). Assembly size: 6228 → 4961 lines (−20%); byte-load instructions:
+349 → 142 (−59%).
+Corpora: 1 MB each; 10 iterations per cell (average of two independent runs).
+
+| Direction  | Corpus  | bs | C (MB/s) | Pascal (MB/s) | Ratio |
+|------------|---------|----|---------:|---------------:|------:|
+| compress   | text    | 1  |     12.0 |           6.7 | 0.56x |
+| compress   | binary  | 1  |     14.5 |          11.1 | 0.77x |
+| compress   | ac      | 1  |     14.3 |          11.1 | 0.77x |
+| compress   | text    | 5  |     10.2 |           6.4 | 0.63x |
+| compress   | binary  | 5  |     13.5 |          10.8 | 0.80x |
+| compress   | ac      | 5  |     14.0 |          10.6 | 0.80x |
+| compress   | text    | 9  |      9.5 |           5.6 | 0.59x |
+| compress   | binary  | 9  |     12.8 |          10.7 | 0.84x |
+| compress   | ac      | 9  |     13.8 |          10.4 | 0.75x |
+| decompress | text    | 1  |    274.5 |         185.5 | 0.68x |
+| decompress | binary  | 1  |     30.5 |          18.0 | 0.59x |
+| decompress | ac      | 1  |     30.5 |          17.3 | 0.57x |
+| decompress | text    | 5  |    238.7 |         172.5 | 0.72x |
+| decompress | binary  | 5  |     25.0 |          15.5 | 0.62x |
+| decompress | ac      | 5  |     22.4 |          15.7 | 0.71x |
+| decompress | text    | 9  |    194.2 |         138.5 | 0.72x |
+| decompress | binary  | 9  |     23.4 |          14.6 | 0.63x |
+| decompress | ac      | 9  |     21.3 |          14.0 | 0.73x |
+
+Average Pascal/C ratio: **~1.45× slower** (arithmetic mean, 18 rows; two-run average).
+Pascal faster: 0 | C faster: 18 | Ties: 0.
+
+Key improvements vs Phase 11.5 baseline (1.52×):
+- compress/text/bs1: 0.49× → 0.54–0.58× (+12–18%)
+- compress/text/bs5: 0.51× → 0.56–0.71× (+10–39%)
+- compress/text/bs9: 0.49× → 0.56–0.61× (+14–24%)
+- compress/binary/bs9: 0.75× → 0.81–0.87× (+8–16%)
+- Decompress rows unchanged (mainGtU is compress-only path; BWT sort not used in decompress).
+- GlobalSink = 0 confirms bit-exactness preserved across all tests.
+- No rows regressed vs Phase 11.5.
 
 ---
 
