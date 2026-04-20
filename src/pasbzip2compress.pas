@@ -236,6 +236,71 @@ begin
 end;
 
 // ---------------------------------------------------------------------------
+// emitMTFGroupFast  — helper for the sendMTFValues hot path
+//
+// Emits exactly 50 Huffman-coded MTF symbols from mtfv[0..49].
+// Extracted into a separate (non-inline) procedure so that FPC keeps the
+// EState pointer in a callee register rather than spilling it to the stack
+// inside the large sendMTFValues frame.
+// ---------------------------------------------------------------------------
+procedure emitMTFGroupFast(s: PEState; mtfv: PUInt16;
+                           lenPtr: PUChar; codePtr: PInt32);
+var
+  i: UInt16;
+begin
+  i := mtfv[ 0]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[ 1]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[ 2]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[ 3]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[ 4]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[ 5]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[ 6]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[ 7]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[ 8]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[ 9]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[10]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[11]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[12]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[13]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[14]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[15]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[16]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[17]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[18]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[19]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[20]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[21]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[22]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[23]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[24]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[25]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[26]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[27]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[28]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[29]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[30]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[31]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[32]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[33]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[34]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[35]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[36]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[37]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[38]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[39]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[40]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[41]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[42]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[43]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[44]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[45]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[46]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[47]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[48]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  i := mtfv[49]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+end;
+
+// ---------------------------------------------------------------------------
 // sendMTFValues  (compress.c lines ~234-597)
 // ---------------------------------------------------------------------------
 procedure sendMTFValues(s: PEState);
@@ -252,10 +317,6 @@ var
   // fast-path cost accumulators
   cost01, cost23, cost45 : UInt32;
   icv   : UInt16;
-  // final-pass fast track
-  mtfv_i              : UInt16;
-  s_len_sel_selCtr    : PUChar;
-  s_code_sel_selCtr   : PInt32;
   // selector MTF
   pos   : array[0..BZ_N_GROUPS - 1] of UChar;
   ll_i, tmp2, tmp : UChar;
@@ -584,60 +645,10 @@ begin
     AssertH(Bool(Ord(s^.selector[selCtr] < nGroups)), 3006);
 
     if (nGroups = 6) and (50 = ge - gs + 1) then begin
-      // fast track
-      s_len_sel_selCtr  := @s^.len [s^.selector[selCtr]][0];
-      s_code_sel_selCtr := @s^.code[s^.selector[selCtr]][0];
-
-      mtfv_i := mtfv[gs+ 0]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+ 1]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+ 2]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+ 3]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+ 4]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+ 5]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+ 6]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+ 7]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+ 8]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+ 9]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+10]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+11]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+12]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+13]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+14]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+15]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+16]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+17]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+18]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+19]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+20]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+21]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+22]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+23]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+24]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+25]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+26]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+27]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+28]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+29]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+30]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+31]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+32]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+33]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+34]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+35]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+36]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+37]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+38]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+39]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+40]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+41]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+42]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+43]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+44]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+45]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+46]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+47]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+48]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
-      mtfv_i := mtfv[gs+49]; bsW(s, s_len_sel_selCtr[mtfv_i], UInt32(s_code_sel_selCtr[mtfv_i]));
+      // fast track: delegate to emitMTFGroupFast to reduce register pressure
+      emitMTFGroupFast(s, mtfv + gs,
+                       @s^.len [s^.selector[selCtr]][0],
+                       @s^.code[s^.selector[selCtr]][0]);
 
     end else begin
       // slow version

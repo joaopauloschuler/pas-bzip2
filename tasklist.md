@@ -465,7 +465,7 @@ Only begin once everything above is green.
 
 ---
 
-## Phase 11 — ON HOLD - Performance optimization (enter only after Phase 9)  — **very last task**
+## Phase 11 — Performance optimization (enter only after Phase 9)  — **very last task**
 
 Do not touch this phase until every row in Phase 8 passes. Changes here must preserve
 bit-exactness.
@@ -475,9 +475,42 @@ In FPC, functions with asm content can not be inlined.
 
 Use "-dAVX2 -CfAVX2 -CpCOREI -OpCOREI" to compile.
 
-- [ ] **11.1** Profile with `perf record` and identify the top three hot functions.
-- [ ] **11.2** Evaluate inlining opportunities for `bsW`, `BZ_UPDATE_CRC`,
+- [X] **11.1** Profile with `perf record` and identify the top three hot functions.
+  Note: `perf record` was blocked by `perf_event_paranoid=4`; used `gprof` (`-pg` build)
+  instead. Top 3 hotspots measured with gprof on the Benchmark binary:
+  1. **`BZ2_decompress`** — 54% of runtime. Huffman bit-decode + BWT decode inner loops.
+  2. **Huffman unit** (`DEBUGEND_$PASBZIP2HUFFMAN`, likely `BZ2_hbMakeCodeLengths`) — 15%.
+     gprof attributes samples between function symbols to the nearest debug-end marker;
+     the real culprit is the Huffman code-length iteration inside `sendMTFValues`.
+  3. **`bsPutUChar` / `sendMTFValues` related** — 17%.
+     Under `-pg`, `inline` is suppressed; the true source is the 50-symbol `bsW` inner
+     loop in `sendMTFValues` where FPC spills the `s` pointer to the stack because the
+     function frame is too large.
+  4. **`unRLE_obuf_to_output_FAST`** — 11%.
+     Double pointer deref (`s^.strm^.avail_out` etc.) reloads `s^.strm` 6+ times per
+     run-drain iteration.
+  Assembly analysis (from `-al` output) confirmed:
+  - `bsW` IS inlined at call sites (no `call BSW` in hot code).
+  - `BZ_UPDATE_CRC` IS inlined (CRC computation inlined in assembly).
+  - `BZ_GET_FAST` is already manually expanded (no function call overhead).
+  - Root cause: register spill of `s` to stack slot `320(%rsp)` in large functions.
+
+- [X] **11.2** Evaluate inlining opportunities for `bsW`, `BZ_UPDATE_CRC`,
   `BZ_GET_FAST` paths.
+  All three are already effectively inlined (bsW/BZ_UPDATE_CRC via FPC `inline`;
+  BZ_GET_FAST via manual macro expansion). The performance gap is from register
+  pressure (spill) in large functions, not missing inlining.
+  Optimizations applied (all pass bit-exactness):
+  1. **`unRLE_obuf_to_output_FAST` / `_SMALL`**: Cache `strm := s^.strm` at function
+     entry, eliminating 6+ double-dereferences per run-drain loop iteration.
+  2. **`sendMTFValues` hot path**: Extracted the 50-symbol group emit block into a
+     separate `emitMTFGroupFast(s, mtfv, lenPtr, codePtr)` procedure. Being a small
+     function, FPC keeps `s` in `%rdi` instead of spilling it to the stack — eliminates
+     ~8 extra stack loads per `bsW` call (×50 calls = ~400 loads per group).
+  3. **`build.sh`**: Added `-dAVX2 -CfAVX2 -CpCOREI -OpCOREI` to `FPC_FLAGS`.
+  Result: average ratio improved from **1.58× → 1.52×** slower than C.
+  Largest gain: decompress/text/bs9 jumped from 0.56× to 0.73×.
+  Compress/text remains at ~0.50-0.54× (bottleneck shifts to `BZ2_hbMakeCodeLengths`).
 
 
 ## Per-function porting checklist
@@ -658,6 +691,48 @@ Phase 10 optimisation work is warranted for all compress rows and most decompres
 
 Note: GlobalSink = 0 confirms Pascal and C produce bit-identical compressed output
 (the XOR of corresponding output blocks cancels — a passing cross-check of Phase 5/8).
+
+---
+
+## Benchmark results — Phase 11 (after optimization)
+
+Measured 2026-04-20 on x86_64 Linux, FPC 3.2.2,
+`-O3 -dAVX2 -CfAVX2 -CpCOREI -OpCOREI`.
+Optimizations applied: strm-pointer caching in unRLE_obuf_to_output_FAST/SMALL;
+emitMTFGroupFast helper to reduce register spill in sendMTFValues.
+Corpora: 1 MB each; 10 iterations per cell.
+
+| Direction  | Corpus  | bs | C (MB/s) | Pascal (MB/s) | Ratio |
+|------------|---------|----|---------:|---------------:|------:|
+| compress   | text    | 1  |     13.1 |           6.5 | 0.50x |
+| compress   | binary  | 1  |     15.4 |          11.2 | 0.73x |
+| compress   | ac      | 1  |     15.6 |          11.5 | 0.74x |
+| compress   | text    | 5  |     11.5 |           6.0 | 0.52x |
+| compress   | binary  | 5  |     15.3 |          11.8 | 0.77x |
+| compress   | ac      | 5  |     15.2 |          12.0 | 0.79x |
+| compress   | text    | 9  |     10.6 |           5.7 | 0.54x |
+| compress   | binary  | 9  |     13.9 |          11.0 | 0.79x |
+| compress   | ac      | 9  |     14.7 |          11.2 | 0.77x |
+| decompress | text    | 1  |    294.1 |         163.9 | 0.56x |
+| decompress | binary  | 1  |     32.5 |          18.7 | 0.57x |
+| decompress | ac      | 1  |     32.5 |          18.8 | 0.58x |
+| decompress | text    | 5  |    227.3 |         156.2 | 0.69x |
+| decompress | binary  | 5  |     27.2 |          17.0 | 0.62x |
+| decompress | ac      | 5  |     27.2 |          16.7 | 0.61x |
+| decompress | text    | 9  |    181.8 |         133.3 | 0.73x |
+| decompress | binary  | 9  |     25.4 |          16.7 | 0.65x |
+| decompress | ac      | 9  |     24.9 |          16.0 | 0.64x |
+
+Average Pascal/C ratio: **1.52× slower** (arithmetic mean, 18 rows).
+Pascal faster: 0 | C faster: 18 | Ties: 0.
+
+Improvement vs baseline: 1.58× → 1.52× (−4% overhead).
+Largest win: decompress/text/bs9 0.56× → 0.73× (+30%); decompress/text/bs5 0.63→0.69×.
+Compress/binary and /ac improved ~5-8%. Compress/text unchanged (bottleneck is
+BZ2_hbMakeCodeLengths, not the bit-stream emitter).
+GlobalSink = 0 confirms bit-exactness preserved.
+
+
 
 ---
 

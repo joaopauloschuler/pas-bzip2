@@ -106,8 +106,10 @@ end;
 // ---------------------------------------------------------------------------
 function unRLE_obuf_to_output_FAST(s: PDState): Bool;
 var
-  k1: UChar;
+  k1  : UChar;
+  strm: Pbz_stream;  { cached — avoids double-deref in the hot output loop }
 begin
+  strm := s^.strm;
   if s^.blockRandomised <> 0 then
   begin
     { ---- randomised branch ---- }
@@ -116,15 +118,15 @@ begin
       { drain current run }
       while True do
       begin
-        if s^.strm^.avail_out = 0 then begin Result := BZ_FALSE; Exit; end;
+        if strm^.avail_out = 0 then begin Result := BZ_FALSE; Exit; end;
         if s^.state_out_len = 0 then Break;
-        PUChar(s^.strm^.next_out)^ := s^.state_out_ch;
+        PUChar(strm^.next_out)^ := s^.state_out_ch;
         BZ_UPDATE_CRC(s^.calculatedBlockCRC, s^.state_out_ch);
         Dec(s^.state_out_len);
-        Inc(s^.strm^.next_out);
-        Dec(s^.strm^.avail_out);
-        Inc(s^.strm^.total_out_lo32);
-        if s^.strm^.total_out_lo32 = 0 then Inc(s^.strm^.total_out_hi32);
+        Inc(strm^.next_out);
+        Dec(strm^.avail_out);
+        Inc(strm^.total_out_lo32);
+        if strm^.total_out_lo32 = 0 then Inc(strm^.total_out_hi32);
       end;
 
       if s^.nblock_used = s^.save_nblock + 1 then begin Result := BZ_FALSE; Exit; end;
@@ -227,15 +229,15 @@ begin
       { drain current run }
       while True do
       begin
-        if s^.strm^.avail_out = 0 then begin Result := BZ_FALSE; Exit; end;
+        if strm^.avail_out = 0 then begin Result := BZ_FALSE; Exit; end;
         if s^.state_out_len = 0 then Break;
-        PUChar(s^.strm^.next_out)^ := s^.state_out_ch;
+        PUChar(strm^.next_out)^ := s^.state_out_ch;
         BZ_UPDATE_CRC(s^.calculatedBlockCRC, s^.state_out_ch);
         Dec(s^.state_out_len);
-        Inc(s^.strm^.next_out);
-        Dec(s^.strm^.avail_out);
-        Inc(s^.strm^.total_out_lo32);
-        if s^.strm^.total_out_lo32 = 0 then Inc(s^.strm^.total_out_hi32);
+        Inc(strm^.next_out);
+        Dec(strm^.avail_out);
+        Inc(strm^.total_out_lo32);
+        if strm^.total_out_lo32 = 0 then Inc(strm^.total_out_hi32);
       end;
 
       if s^.nblock_used = s^.save_nblock + 1 then begin Result := BZ_FALSE; Exit; end;
@@ -298,8 +300,10 @@ end;
 // ---------------------------------------------------------------------------
 function unRLE_obuf_to_output_SMALL(s: PDState): Bool;
 var
-  k1: UChar;
+  k1  : UChar;
+  strm: Pbz_stream;  { cached — avoids double-deref in the hot output loop }
 begin
+  strm := s^.strm;
   if s^.blockRandomised <> 0 then
   begin
     { ---- randomised branch ---- }
@@ -307,15 +311,15 @@ begin
     begin
       while True do
       begin
-        if s^.strm^.avail_out = 0 then begin Result := BZ_FALSE; Exit; end;
+        if strm^.avail_out = 0 then begin Result := BZ_FALSE; Exit; end;
         if s^.state_out_len = 0 then Break;
-        PUChar(s^.strm^.next_out)^ := s^.state_out_ch;
+        PUChar(strm^.next_out)^ := s^.state_out_ch;
         BZ_UPDATE_CRC(s^.calculatedBlockCRC, s^.state_out_ch);
         Dec(s^.state_out_len);
-        Inc(s^.strm^.next_out);
-        Dec(s^.strm^.avail_out);
-        Inc(s^.strm^.total_out_lo32);
-        if s^.strm^.total_out_lo32 = 0 then Inc(s^.strm^.total_out_hi32);
+        Inc(strm^.next_out);
+        Dec(strm^.avail_out);
+        Inc(strm^.total_out_lo32);
+        if strm^.total_out_lo32 = 0 then Inc(strm^.total_out_hi32);
       end;
 
       if s^.nblock_used = s^.save_nblock + 1 then begin Result := BZ_FALSE; Exit; end;
@@ -411,15 +415,15 @@ begin
     begin
       while True do
       begin
-        if s^.strm^.avail_out = 0 then begin Result := BZ_FALSE; Exit; end;
+        if strm^.avail_out = 0 then begin Result := BZ_FALSE; Exit; end;
         if s^.state_out_len = 0 then Break;
-        PUChar(s^.strm^.next_out)^ := s^.state_out_ch;
+        PUChar(strm^.next_out)^ := s^.state_out_ch;
         BZ_UPDATE_CRC(s^.calculatedBlockCRC, s^.state_out_ch);
         Dec(s^.state_out_len);
-        Inc(s^.strm^.next_out);
-        Dec(s^.strm^.avail_out);
-        Inc(s^.strm^.total_out_lo32);
-        if s^.strm^.total_out_lo32 = 0 then Inc(s^.strm^.total_out_hi32);
+        Inc(strm^.next_out);
+        Dec(strm^.avail_out);
+        Inc(strm^.total_out_lo32);
+        if strm^.total_out_lo32 = 0 then Inc(strm^.total_out_hi32);
       end;
 
       if s^.nblock_used = s^.save_nblock + 1 then begin Result := BZ_FALSE; Exit; end;

@@ -43,7 +43,7 @@ else
   echo "libbz2.so already present, skipping C build."
 fi
 
-FPC_FLAGS="-O3 -Fu$SRC_DIR -Fi$SRC_DIR -FE$BIN_DIR -Fl$SRC_DIR $@"
+FPC_FLAGS="-O3 -dAVX2 -CfAVX2 -CpCOREI -OpCOREI -Fu$SRC_DIR -Fi$SRC_DIR -FE$BIN_DIR -Fl$SRC_DIR $@"
 
 compile_test() {
   local name="$1"
@@ -72,9 +72,9 @@ fpc $FPC_FLAGS $SRC_DIR/bzip2.pas
 echo "bzip2 compiled -> $BIN_DIR/bzip2"
 
 # ---- Clean compiled Pascal artifacts ----
-find "$SRC_DIR"    -maxdepth 2 \( -name '*.ppu' -o -name '*.o' -o -name '*.compiled' \) -delete
-find "$BIN_DIR"    -maxdepth 1 \( -name '*.ppu' -o -name '*.o' -o -name '*.compiled' \) -delete
-find "$SCRIPT_DIR" -maxdepth 1 \( -name '*.ppu' -o -name '*.o' -o -name '*.compiled' \) -delete
+find "$SRC_DIR"    -maxdepth 2 \( -name '*.ppu' -o -name '*.o' -o -name '*.compiled' -o -name '*.s' \) -delete
+find "$BIN_DIR"    -maxdepth 1 \( -name '*.ppu' -o -name '*.o' -o -name '*.compiled' -o -name '*.s' \) -delete
+find "$SCRIPT_DIR" -maxdepth 1 \( -name '*.ppu' -o -name '*.o' -o -name '*.compiled' -o -name '*.s' \) -delete
 
 echo
 echo "Build complete."
