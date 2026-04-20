@@ -242,62 +242,49 @@ end;
 // Extracted into a separate (non-inline) procedure so that FPC keeps the
 // EState pointer in a callee register rather than spilling it to the stack
 // inside the large sendMTFValues frame.
+//
+// Phase 11.5 optimisation: cache s^.bsBuff, s^.bsLive, s^.zbits, s^.numZ
+// into locals for the entire 50-symbol emit.  bsW is expanded inline using
+// the cached locals, eliminating ~200 s^ field reloads per group call.
+// Locals are written back to s^ once at exit.
 // ---------------------------------------------------------------------------
 procedure emitMTFGroupFast(s: PEState; mtfv: PUInt16;
                            lenPtr: PUChar; codePtr: PInt32);
 var
-  i: UInt16;
+  j      : Int32;
+  sym    : UInt16;
+  n      : Int32;
+  v      : UInt32;
+  bsBuff : UInt32;
+  bsLive : Int32;
+  zbits  : PUChar;
+  numZ   : Int32;
 begin
-  i := mtfv[ 0]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[ 1]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[ 2]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[ 3]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[ 4]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[ 5]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[ 6]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[ 7]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[ 8]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[ 9]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[10]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[11]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[12]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[13]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[14]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[15]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[16]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[17]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[18]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[19]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[20]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[21]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[22]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[23]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[24]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[25]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[26]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[27]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[28]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[29]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[30]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[31]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[32]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[33]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[34]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[35]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[36]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[37]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[38]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[39]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[40]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[41]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[42]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[43]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[44]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[45]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[46]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[47]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[48]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
-  i := mtfv[49]; bsW(s, lenPtr[i], UInt32(codePtr[i]));
+  { Load hot fields once — FPC keeps these locals in registers }
+  bsBuff := s^.bsBuff;
+  bsLive := s^.bsLive;
+  zbits  := s^.zbits;
+  numZ   := s^.numZ;
+
+  for j := 0 to 49 do begin
+    sym := mtfv[j];
+    n   := lenPtr[sym];
+    v   := UInt32(codePtr[sym]);
+    { bsW expanded inline with cached locals }
+    while bsLive >= 8 do begin
+      zbits[numZ] := UChar(bsBuff shr 24);
+      Inc(numZ);
+      bsBuff := bsBuff shl 8;
+      Dec(bsLive, 8);
+    end;
+    bsBuff := bsBuff or (v shl (32 - bsLive - n));
+    Inc(bsLive, n);
+  end;
+
+  { Write-back — zbits base pointer is stable, no write-back needed for it }
+  s^.bsBuff := bsBuff;
+  s^.bsLive := bsLive;
+  s^.numZ   := numZ;
 end;
 
 // ---------------------------------------------------------------------------
