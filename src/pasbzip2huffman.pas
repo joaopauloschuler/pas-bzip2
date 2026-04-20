@@ -24,57 +24,20 @@ procedure BZ2_hbCreateDecodeTables(limit, base, perm: PInt32;
 implementation
 
 // ---------------------------------------------------------------------------
-// Heap-construction macros (translated from the C macros verbatim)
-// ---------------------------------------------------------------------------
-
-// WEIGHTOF / DEPTHOF / ADDWEIGHTS — pack (weight << 8) | depth in one Int32
-// These are inline helpers used only inside BZ2_hbMakeCodeLengths.
-
-// UPHEAP: sift element at position z upward
-procedure UpHeap(z: Int32; var heap: array of Int32; const weight: array of Int32);
-  {$IFDEF FPC} inline; {$ENDIF}
-var
-  zz, tmp: Int32;
-begin
-  zz := z;
-  tmp := heap[zz];
-  while weight[tmp] < weight[heap[zz shr 1]] do
-  begin
-    heap[zz] := heap[zz shr 1];
-    zz := zz shr 1;
-  end;
-  heap[zz] := tmp;
-end;
-
-// DOWNHEAP: sift element at position z downward
-procedure DownHeap(z: Int32; nHeap: Int32;
-    var heap: array of Int32; const weight: array of Int32);
-  {$IFDEF FPC} inline; {$ENDIF}
-var
-  zz, yy, tmp: Int32;
-begin
-  zz := z;
-  tmp := heap[zz];
-  while True do
-  begin
-    yy := zz shl 1;
-    if yy > nHeap then Break;
-    if (yy < nHeap) and (weight[heap[yy + 1]] < weight[heap[yy]]) then
-      Inc(yy);
-    if weight[tmp] < weight[heap[yy]] then Break;
-    heap[zz] := heap[yy];
-    zz := yy;
-  end;
-  heap[zz] := tmp;
-end;
-
-// ---------------------------------------------------------------------------
 // BZ2_hbMakeCodeLengths
 // ---------------------------------------------------------------------------
+// The C source uses UPHEAP/DOWNHEAP macros that expand inline with direct
+// access to the enclosing function's local heap[]/weight[] arrays.  Translating
+// them as procedures with open-array parameters passes a hidden length argument
+// and prevents FPC from keeping the array base-pointers in registers (the hot
+// path reads heap/weight on every sift step).  We therefore expand all three
+// call sites (two DOWNHEAP + one UPHEAP per outer iteration) directly, sharing
+// the locals zz/yy/tmp.  Semantics are bit-identical to the C reference.
 procedure BZ2_hbMakeCodeLengths(len: PUChar; freq: PInt32;
     alphaSize, maxLen: Int32);
 var
   nNodes, nHeap, n1, n2, i, j, k, d1, d2: Int32;
+  zz, yy, tmp: Int32;
   tooLong: Bool;
   heap   : array[0..BZ_MAX_ALPHA_SIZE + 1] of Int32;
   weight : array[0..BZ_MAX_ALPHA_SIZE * 2 - 1] of Int32;
@@ -104,17 +67,50 @@ begin
       parent[i] := -1;
       Inc(nHeap);
       heap[nHeap] := i;
-      UpHeap(nHeap, heap, weight);
+      // UPHEAP inline: sift heap[nHeap] upward
+      zz := nHeap; tmp := heap[zz];
+      while weight[tmp] < weight[heap[zz shr 1]] do
+      begin
+        heap[zz] := heap[zz shr 1];
+        zz := zz shr 1;
+      end;
+      heap[zz] := tmp;
     end;
 
     while nHeap > 1 do
     begin
-      n1 := heap[1]; heap[1] := heap[nHeap]; Dec(nHeap); DownHeap(1, nHeap, heap, weight);
-      n2 := heap[1]; heap[1] := heap[nHeap]; Dec(nHeap); DownHeap(1, nHeap, heap, weight);
+      // pop minimum (n1) ---------------------------------------------------
+      n1 := heap[1]; heap[1] := heap[nHeap]; Dec(nHeap);
+      // DOWNHEAP inline
+      zz := 1; tmp := heap[zz];
+      while True do
+      begin
+        yy := zz shl 1;
+        if yy > nHeap then Break;
+        if (yy < nHeap) and (weight[heap[yy + 1]] < weight[heap[yy]]) then Inc(yy);
+        if weight[tmp] < weight[heap[yy]] then Break;
+        heap[zz] := heap[yy]; zz := yy;
+      end;
+      heap[zz] := tmp;
+
+      // pop next minimum (n2) ----------------------------------------------
+      n2 := heap[1]; heap[1] := heap[nHeap]; Dec(nHeap);
+      // DOWNHEAP inline
+      zz := 1; tmp := heap[zz];
+      while True do
+      begin
+        yy := zz shl 1;
+        if yy > nHeap then Break;
+        if (yy < nHeap) and (weight[heap[yy + 1]] < weight[heap[yy]]) then Inc(yy);
+        if weight[tmp] < weight[heap[yy]] then Break;
+        heap[zz] := heap[yy]; zz := yy;
+      end;
+      heap[zz] := tmp;
+
       Inc(nNodes);
       parent[n1] := nNodes;
       parent[n2] := nNodes;
-      // ADDWEIGHTS: sum the high-24-bit weights, depth = 1 + max of depths
+      // ADDWEIGHTS: sum high-24-bit weights, depth = 1 + max(depth(n1), depth(n2))
       d1 := weight[n1] and $FF;
       d2 := weight[n2] and $FF;
       if d1 > d2 then
@@ -124,7 +120,14 @@ begin
       parent[nNodes] := -1;
       Inc(nHeap);
       heap[nHeap] := nNodes;
-      UpHeap(nHeap, heap, weight);
+      // UPHEAP inline: sift the new internal node upward
+      zz := nHeap; tmp := heap[zz];
+      while weight[tmp] < weight[heap[zz shr 1]] do
+      begin
+        heap[zz] := heap[zz shr 1];
+        zz := zz shr 1;
+      end;
+      heap[zz] := tmp;
     end;
 
     tooLong := BZ_FALSE;

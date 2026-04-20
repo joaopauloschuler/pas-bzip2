@@ -512,6 +512,20 @@ Use "-dAVX2 -CfAVX2 -CpCOREI -OpCOREI" to compile.
   Largest gain: decompress/text/bs9 jumped from 0.56× to 0.73×.
   Compress/text remains at ~0.50-0.54× (bottleneck shifts to `BZ2_hbMakeCodeLengths`).
 
+- [X] **11.3** Optimize `BZ2_hbMakeCodeLengths` — remove open-array parameter overhead
+  from `UpHeap`/`DownHeap` helper procedures.
+  Root cause: `UpHeap` and `DownHeap` were called with `var`/`const` open-array parameters,
+  which pass a hidden length argument and prevent FPC from keeping `heap` and `weight`
+  array base-pointers in registers. In C these are macros (fully inlined).
+  Fix: deleted the two helper procedures and expanded the UPHEAP/DOWNHEAP logic inline in
+  `BZ2_hbMakeCodeLengths` at all three call sites (UPHEAP×1 in init loop, DOWNHEAP×2
+  per outer merge iteration), sharing locals `zz`, `yy`, `tmp`.
+  `TestHuffman` and `TestBitExactness` (all 18 corpus×bs×wf combinations) pass —
+  bit-exactness preserved.
+  Result: average ratio improved from **1.52× → 1.45×** slower than C.
+  Largest gains: compress/text/bs1 0.50× → 0.63×; compress/text/bs9 0.54× → 0.61×;
+  decompress/text/bs1 0.56× → 0.75×. GlobalSink = 0 confirms bit-exactness.
+
 
 ## Per-function porting checklist
 
@@ -730,6 +744,45 @@ Improvement vs baseline: 1.58× → 1.52× (−4% overhead).
 Largest win: decompress/text/bs9 0.56× → 0.73× (+30%); decompress/text/bs5 0.63→0.69×.
 Compress/binary and /ac improved ~5-8%. Compress/text unchanged (bottleneck is
 BZ2_hbMakeCodeLengths, not the bit-stream emitter).
+GlobalSink = 0 confirms bit-exactness preserved.
+
+---
+
+## Benchmark results — Phase 11.3 (after BZ2_hbMakeCodeLengths inline)
+
+Measured 2026-04-20 on x86_64 Linux, FPC 3.2.2,
+`-O3 -dAVX2 -CfAVX2 -CpCOREI -OpCOREI`.
+Optimization applied: inlined UPHEAP/DOWNHEAP directly in `BZ2_hbMakeCodeLengths`,
+eliminating open-array parameter overhead (hidden length arg + loss of register allocation).
+Corpora: 1 MB each; 10 iterations per cell.
+
+| Direction  | Corpus  | bs | C (MB/s) | Pascal (MB/s) | Ratio |
+|------------|---------|----|---------:|---------------:|------:|
+| compress   | text    | 1  |      9.8 |           6.2 | 0.63x |
+| compress   | binary  | 1  |     12.5 |           9.8 | 0.78x |
+| compress   | ac      | 1  |     13.4 |          10.1 | 0.75x |
+| compress   | text    | 5  |      9.9 |           5.4 | 0.55x |
+| compress   | binary  | 5  |     13.1 |          10.4 | 0.79x |
+| compress   | ac      | 5  |     13.2 |          10.4 | 0.79x |
+| compress   | text    | 9  |      7.6 |           4.6 | 0.61x |
+| compress   | binary  | 9  |     11.9 |           9.3 | 0.78x |
+| compress   | ac      | 9  |     12.3 |           9.7 | 0.79x |
+| decompress | text    | 1  |    200.0 |         149.3 | 0.75x |
+| decompress | binary  | 1  |     23.9 |          16.3 | 0.68x |
+| decompress | ac      | 1  |     25.4 |          14.2 | 0.56x |
+| decompress | text    | 5  |    227.3 |         119.0 | 0.52x |
+| decompress | binary  | 5  |     27.0 |          16.4 | 0.61x |
+| decompress | ac      | 5  |     18.5 |          16.2 | 0.87x |
+| decompress | text    | 9  |    151.5 |         103.1 | 0.68x |
+| decompress | binary  | 9  |     21.1 |          13.2 | 0.63x |
+| decompress | ac      | 9  |     21.7 |          14.6 | 0.67x |
+
+Average Pascal/C ratio: **1.45× slower** (arithmetic mean, 18 rows).
+Pascal faster: 0 | C faster: 18 | Ties: 0.
+
+Improvement vs Phase 11.2: 1.52× → 1.45× (−5% overhead).
+Largest wins: compress/text/bs1 0.50× → 0.63× (+26%); compress/text/bs9 0.54× → 0.61×;
+decompress/text/bs1 0.56× → 0.75× (+34%).
 GlobalSink = 0 confirms bit-exactness preserved.
 
 
