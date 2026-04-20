@@ -103,16 +103,34 @@ end;
 // unRLE_obuf_to_output_FAST  (bzlib.c)
 // Implements the slow-path structure for both randomised and non-randomised.
 // Returns True iff data corruption is detected.
+// Non-randomised branch uses BZ_GET_FAST_C pattern: all hot fields cached in
+// local variables so FPC can keep them in registers (mirrors C reference).
 // ---------------------------------------------------------------------------
 function unRLE_obuf_to_output_FAST(s: PDState): Bool;
+label
+  L_RETURN_NOTR, L_SAVE;
 var
-  k1  : UChar;
-  strm: Pbz_stream;  { cached — avoids double-deref in the hot output loop }
+  k1               : UChar;
+  strm             : Pbz_stream;
+  { cached locals for the non-randomised fast path (BZ_GET_FAST_C pattern) }
+  c_crc            : UInt32;
+  c_state_out_ch   : UChar;
+  c_state_out_len  : Int32;
+  c_nblock_used    : Int32;
+  c_k0             : Int32;
+  c_tt             : PUInt32;
+  c_tPos           : UInt32;
+  cs_next_out      : PChar;
+  cs_avail_out     : UInt32;
+  ro_blockSize100k : Int32;
+  avail_out_INIT   : UInt32;
+  s_save_nblockPP  : Int32;
+  total_out_lo32_old: UInt32;
 begin
   strm := s^.strm;
   if s^.blockRandomised <> 0 then
   begin
-    { ---- randomised branch ---- }
+    { ---- randomised branch (uses s^ directly — rand state too complex to cache) ---- }
     while True do
     begin
       { drain current run }
@@ -223,73 +241,103 @@ begin
   end
   else
   begin
-    { ---- non-randomised branch (slow-path structure) ---- }
+    { ---- non-randomised branch: BZ_GET_FAST_C cached-locals fast path ----
+      Mirrors the C reference exactly: restore hot fields to locals at entry,
+      use them throughout the hot loop, save back at all exit points.
+      Batch-updates total_out_lo32 once per call (avail_out_INIT - cs_avail_out).  }
+    c_crc            := s^.calculatedBlockCRC;
+    c_state_out_ch   := s^.state_out_ch;
+    c_state_out_len  := s^.state_out_len;
+    c_nblock_used    := s^.nblock_used;
+    c_k0             := s^.k0;
+    c_tt             := s^.tt;
+    c_tPos           := s^.tPos;
+    cs_next_out      := strm^.next_out;
+    cs_avail_out     := strm^.avail_out;
+    ro_blockSize100k := s^.blockSize100k;
+    avail_out_INIT   := cs_avail_out;
+    s_save_nblockPP  := s^.save_nblock + 1;
+
     while True do
     begin
-      { drain current run }
-      while True do
+      { drain current run into output buffer }
+      while c_state_out_len > 0 do
       begin
-        if strm^.avail_out = 0 then begin Result := BZ_FALSE; Exit; end;
-        if s^.state_out_len = 0 then Break;
-        PUChar(strm^.next_out)^ := s^.state_out_ch;
-        BZ_UPDATE_CRC(s^.calculatedBlockCRC, s^.state_out_ch);
-        Dec(s^.state_out_len);
-        Inc(strm^.next_out);
-        Dec(strm^.avail_out);
-        Inc(strm^.total_out_lo32);
-        if strm^.total_out_lo32 = 0 then Inc(strm^.total_out_hi32);
+        if cs_avail_out = 0 then goto L_RETURN_NOTR;
+        PUChar(cs_next_out)^ := c_state_out_ch;
+        BZ_UPDATE_CRC(c_crc, c_state_out_ch);
+        Dec(c_state_out_len);
+        Inc(cs_next_out);
+        Dec(cs_avail_out);
       end;
 
-      if s^.nblock_used = s^.save_nblock + 1 then begin Result := BZ_FALSE; Exit; end;
-      if s^.nblock_used > s^.save_nblock + 1 then begin Result := BZ_TRUE; Exit; end;
+      if c_nblock_used > s_save_nblockPP then begin Result := BZ_TRUE; goto L_SAVE; end;
+      if c_nblock_used = s_save_nblockPP then begin c_state_out_len := 0; goto L_RETURN_NOTR; end;
 
-      s^.state_out_len := 1;
-      s^.state_out_ch  := s^.k0;
+      c_state_out_ch := c_k0;
+      { BZ_GET_FAST_C(k1) }
+      if c_tPos >= UInt32(100000) * UInt32(ro_blockSize100k) then begin Result := BZ_TRUE; goto L_SAVE; end;
+      c_tPos := c_tt[c_tPos];
+      k1 := UChar(c_tPos and $FF);
+      c_tPos := c_tPos shr 8;
+      Inc(c_nblock_used);
+      if k1 <> c_k0 then begin c_k0 := k1; c_state_out_len := 1; Continue; end;
+      if c_nblock_used = s_save_nblockPP then begin c_state_out_len := 1; Continue; end;
 
-      { BZ_GET_FAST(k1) }
-      if s^.tPos >= UInt32(100000) * UInt32(s^.blockSize100k) then begin Result := BZ_TRUE; Exit; end;
-      s^.tPos := s^.tt[s^.tPos];
-      k1 := UChar(s^.tPos and $FF);
-      s^.tPos := s^.tPos shr 8;
-      Inc(s^.nblock_used);
-      if s^.nblock_used = s^.save_nblock + 1 then Continue;
-      if k1 <> s^.k0 then begin s^.k0 := k1; Continue; end;
+      c_state_out_len := 2;
+      { BZ_GET_FAST_C(k1) }
+      if c_tPos >= UInt32(100000) * UInt32(ro_blockSize100k) then begin Result := BZ_TRUE; goto L_SAVE; end;
+      c_tPos := c_tt[c_tPos];
+      k1 := UChar(c_tPos and $FF);
+      c_tPos := c_tPos shr 8;
+      Inc(c_nblock_used);
+      if c_nblock_used = s_save_nblockPP then Continue;
+      if k1 <> c_k0 then begin c_k0 := k1; Continue; end;
 
-      s^.state_out_len := 2;
-      { BZ_GET_FAST(k1) }
-      if s^.tPos >= UInt32(100000) * UInt32(s^.blockSize100k) then begin Result := BZ_TRUE; Exit; end;
-      s^.tPos := s^.tt[s^.tPos];
-      k1 := UChar(s^.tPos and $FF);
-      s^.tPos := s^.tPos shr 8;
-      Inc(s^.nblock_used);
-      if s^.nblock_used = s^.save_nblock + 1 then Continue;
-      if k1 <> s^.k0 then begin s^.k0 := k1; Continue; end;
+      c_state_out_len := 3;
+      { BZ_GET_FAST_C(k1) }
+      if c_tPos >= UInt32(100000) * UInt32(ro_blockSize100k) then begin Result := BZ_TRUE; goto L_SAVE; end;
+      c_tPos := c_tt[c_tPos];
+      k1 := UChar(c_tPos and $FF);
+      c_tPos := c_tPos shr 8;
+      Inc(c_nblock_used);
+      if c_nblock_used = s_save_nblockPP then Continue;
+      if k1 <> c_k0 then begin c_k0 := k1; Continue; end;
 
-      s^.state_out_len := 3;
-      { BZ_GET_FAST(k1) }
-      if s^.tPos >= UInt32(100000) * UInt32(s^.blockSize100k) then begin Result := BZ_TRUE; Exit; end;
-      s^.tPos := s^.tt[s^.tPos];
-      k1 := UChar(s^.tPos and $FF);
-      s^.tPos := s^.tPos shr 8;
-      Inc(s^.nblock_used);
-      if s^.nblock_used = s^.save_nblock + 1 then Continue;
-      if k1 <> s^.k0 then begin s^.k0 := k1; Continue; end;
+      { BZ_GET_FAST_C(k1) }
+      if c_tPos >= UInt32(100000) * UInt32(ro_blockSize100k) then begin Result := BZ_TRUE; goto L_SAVE; end;
+      c_tPos := c_tt[c_tPos];
+      k1 := UChar(c_tPos and $FF);
+      c_tPos := c_tPos shr 8;
+      Inc(c_nblock_used);
+      c_state_out_len := Int32(k1) + 4;
 
-      { BZ_GET_FAST(k1) }
-      if s^.tPos >= UInt32(100000) * UInt32(s^.blockSize100k) then begin Result := BZ_TRUE; Exit; end;
-      s^.tPos := s^.tt[s^.tPos];
-      k1 := UChar(s^.tPos and $FF);
-      s^.tPos := s^.tPos shr 8;
-      Inc(s^.nblock_used);
-      s^.state_out_len := Int32(k1) + 4;
-
-      { BZ_GET_FAST(s^.k0) }
-      if s^.tPos >= UInt32(100000) * UInt32(s^.blockSize100k) then begin Result := BZ_TRUE; Exit; end;
-      s^.tPos := s^.tt[s^.tPos];
-      s^.k0 := Int32(s^.tPos and $FF);
-      s^.tPos := s^.tPos shr 8;
-      Inc(s^.nblock_used);
+      { BZ_GET_FAST_C(c_k0) }
+      if c_tPos >= UInt32(100000) * UInt32(ro_blockSize100k) then begin Result := BZ_TRUE; goto L_SAVE; end;
+      c_tPos := c_tt[c_tPos];
+      c_k0 := Int32(c_tPos and $FF);
+      c_tPos := c_tPos shr 8;
+      Inc(c_nblock_used);
     end; { while True - non-randomised }
+
+    L_RETURN_NOTR:
+    Result := BZ_FALSE;
+    L_SAVE:
+    { batch-update total_out_lo32 (one add per call instead of per byte) }
+    total_out_lo32_old := strm^.total_out_lo32;
+    strm^.total_out_lo32 := total_out_lo32_old + (avail_out_INIT - cs_avail_out);
+    if strm^.total_out_lo32 < total_out_lo32_old then Inc(strm^.total_out_hi32);
+    { save all cached locals back to s^ }
+    s^.calculatedBlockCRC := c_crc;
+    s^.state_out_ch       := c_state_out_ch;
+    s^.state_out_len      := c_state_out_len;
+    s^.nblock_used        := c_nblock_used;
+    s^.k0                 := c_k0;
+    s^.tt                 := c_tt;
+    s^.tPos               := c_tPos;
+    strm^.next_out        := cs_next_out;
+    strm^.avail_out       := cs_avail_out;
+    Exit;
   end;
 
   Result := BZ_FALSE;

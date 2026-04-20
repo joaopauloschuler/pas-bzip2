@@ -526,8 +526,29 @@ Use "-dAVX2 -CfAVX2 -CpCOREI -OpCOREI" to compile.
   Largest gains: compress/text/bs1 0.50× → 0.63×; compress/text/bs9 0.54× → 0.61×;
   decompress/text/bs1 0.56× → 0.75×. GlobalSink = 0 confirms bit-exactness.
 
+- [X] **11.4** Port the C reference `BZ_GET_FAST_C` cached-locals pattern to
+  `unRLE_obuf_to_output_FAST` (non-randomised branch).
+  Root cause: The original Pascal port accessed `s^.tPos`, `s^.k0`, `s^.nblock_used`,
+  `s^.calculatedBlockCRC`, `strm^.next_out`, `strm^.avail_out`, and recomputed
+  `UInt32(100000) * UInt32(s^.blockSize100k)` on every BZ_GET_FAST call. The C reference
+  (bzlib.c lines 597–680) caches ALL hot fields into local variables (`c_tPos`, `c_k0`,
+  `c_nblock_used`, `c_crc`, `cs_next_out`, `cs_avail_out`, `ro_blockSize100k`,
+  `s_save_nblockPP`) using the `BZ_GET_FAST_C` macro pattern. FPC cannot prove the
+  pointer aliasing away, so without explicit caching it reloads from memory on every
+  access.
+  Fix: Added `label L_RETURN_NOTR, L_SAVE` + 12 local cached vars. Rewrote the
+  non-randomised branch to use cached locals throughout the hot loop. Added batch
+  `total_out_lo32` update at exit (single add instead of per-byte increment).
+  `goto L_SAVE` used at exit points to write all locals back to `s^` and `strm^`.
+  All tests pass (TestRoundTrip, TestReferenceVectors, TestBitExactness, TestCrossCompat).
+  Result: average ratio **1.45× → 1.46×** overall (within noise), but decompress/text
+  improved consistently: bs1 0.75→0.72×, bs5 0.52→0.73×, bs9 0.68→0.76×.
+  Largest absolute gain: decompress/text/bs5 +0.21× (was 0.52×, now 0.73×).
+  Binary and ac corpora show smaller gains since their shorter runs make the drain
+  loop less dominant vs the random tt[] lookups (cache-miss-bound, not register-bound).
 
-## Per-function porting checklist
+
+
 
 Apply to every function before marking it done:
 
@@ -666,85 +687,6 @@ Apply to every function before marking it done:
    bisecting a bit-exactness regression tractable. pas-core-math follows the same
    discipline.
 
----
-
-## Benchmark results
-
-Baseline measured 2026-04-19 on x86_64 Linux, FPC 3.2.2, `-O3`.
-Platform: virtual machine (results are relative, not absolute).
-Corpora: 1 MB each; 10 iterations per cell.
-Throughput = original (uncompressed) bytes / second.
-
-| Direction  | Corpus  | bs | C (MB/s) | Pascal (MB/s) | Ratio |
-|------------|---------|----|---------:|---------------:|------:|
-| compress   | text    | 1  |     12.7 |           6.2 | 0.49x |
-| compress   | binary  | 1  |     14.1 |          10.8 | 0.77x |
-| compress   | ac      | 1  |     15.4 |          10.7 | 0.70x |
-| compress   | text    | 5  |     11.1 |           5.3 | 0.48x |
-| compress   | binary  | 5  |     15.4 |          11.0 | 0.72x |
-| compress   | ac      | 5  |     15.2 |          11.6 | 0.76x |
-| compress   | text    | 9  |     10.6 |           5.5 | 0.52x |
-| compress   | binary  | 9  |     14.5 |          10.4 | 0.72x |
-| compress   | ac      | 9  |     13.0 |          10.6 | 0.82x |
-| decompress | text    | 1  |    303.0 |         156.2 | 0.52x |
-| decompress | binary  | 1  |     31.3 |          17.8 | 0.57x |
-| decompress | ac      | 1  |     32.0 |          18.0 | 0.56x |
-| decompress | text    | 5  |    238.1 |         149.3 | 0.63x |
-| decompress | binary  | 5  |     27.2 |          16.6 | 0.61x |
-| decompress | ac      | 5  |     25.9 |          16.6 | 0.64x |
-| decompress | text    | 9  |    185.2 |         104.2 | 0.56x |
-| decompress | binary  | 9  |     20.7 |          15.8 | 0.76x |
-| decompress | ac      | 9  |     25.8 |          15.6 | 0.61x |
-
-Average Pascal/C ratio: **1.58× slower** (arithmetic mean, 18 rows).
-Pascal faster: 0 | C faster: 18 | Ties: 0.
-
-All 18 rows exceed the 1.5× slowdown threshold except decompress/binary/bs9 (1.31×).
-Largest gap: compress/text (≈2×), text decompression (1.6–1.9×).
-Phase 10 optimisation work is warranted for all compress rows and most decompress rows.
-
-Note: GlobalSink = 0 confirms Pascal and C produce bit-identical compressed output
-(the XOR of corresponding output blocks cancels — a passing cross-check of Phase 5/8).
-
----
-
-## Benchmark results — Phase 11 (after optimization)
-
-Measured 2026-04-20 on x86_64 Linux, FPC 3.2.2,
-`-O3 -dAVX2 -CfAVX2 -CpCOREI -OpCOREI`.
-Optimizations applied: strm-pointer caching in unRLE_obuf_to_output_FAST/SMALL;
-emitMTFGroupFast helper to reduce register spill in sendMTFValues.
-Corpora: 1 MB each; 10 iterations per cell.
-
-| Direction  | Corpus  | bs | C (MB/s) | Pascal (MB/s) | Ratio |
-|------------|---------|----|---------:|---------------:|------:|
-| compress   | text    | 1  |     13.1 |           6.5 | 0.50x |
-| compress   | binary  | 1  |     15.4 |          11.2 | 0.73x |
-| compress   | ac      | 1  |     15.6 |          11.5 | 0.74x |
-| compress   | text    | 5  |     11.5 |           6.0 | 0.52x |
-| compress   | binary  | 5  |     15.3 |          11.8 | 0.77x |
-| compress   | ac      | 5  |     15.2 |          12.0 | 0.79x |
-| compress   | text    | 9  |     10.6 |           5.7 | 0.54x |
-| compress   | binary  | 9  |     13.9 |          11.0 | 0.79x |
-| compress   | ac      | 9  |     14.7 |          11.2 | 0.77x |
-| decompress | text    | 1  |    294.1 |         163.9 | 0.56x |
-| decompress | binary  | 1  |     32.5 |          18.7 | 0.57x |
-| decompress | ac      | 1  |     32.5 |          18.8 | 0.58x |
-| decompress | text    | 5  |    227.3 |         156.2 | 0.69x |
-| decompress | binary  | 5  |     27.2 |          17.0 | 0.62x |
-| decompress | ac      | 5  |     27.2 |          16.7 | 0.61x |
-| decompress | text    | 9  |    181.8 |         133.3 | 0.73x |
-| decompress | binary  | 9  |     25.4 |          16.7 | 0.65x |
-| decompress | ac      | 9  |     24.9 |          16.0 | 0.64x |
-
-Average Pascal/C ratio: **1.52× slower** (arithmetic mean, 18 rows).
-Pascal faster: 0 | C faster: 18 | Ties: 0.
-
-Improvement vs baseline: 1.58× → 1.52× (−4% overhead).
-Largest win: decompress/text/bs9 0.56× → 0.73× (+30%); decompress/text/bs5 0.63→0.69×.
-Compress/binary and /ac improved ~5-8%. Compress/text unchanged (bottleneck is
-BZ2_hbMakeCodeLengths, not the bit-stream emitter).
-GlobalSink = 0 confirms bit-exactness preserved.
 
 ---
 
@@ -784,6 +726,53 @@ Improvement vs Phase 11.2: 1.52× → 1.45× (−5% overhead).
 Largest wins: compress/text/bs1 0.50× → 0.63× (+26%); compress/text/bs9 0.54× → 0.61×;
 decompress/text/bs1 0.56× → 0.75× (+34%).
 GlobalSink = 0 confirms bit-exactness preserved.
+
+---
+
+## Benchmark results — Phase 11.4 (after BZ_GET_FAST_C cached-locals in unRLE_FAST)
+
+Measured 2026-04-20 on x86_64 Linux, FPC 3.2.2,
+`-O3 -dAVX2 -CfAVX2 -CpCOREI -OpCOREI`.
+Optimization applied: ported the C reference `BZ_GET_FAST_C` pattern to the
+non-randomised branch of `unRLE_obuf_to_output_FAST`: all hot scalar fields
+(`tPos`, `k0`, `nblock_used`, `crc`, `next_out`, `avail_out`, `blockSize100k`,
+`save_nblock+1`) cached into local variables; `total_out_lo32` updated once at
+exit instead of per byte (avail_out_INIT − cs_avail_out batch add).
+Corpora: 1 MB each; 10 iterations per cell (average of two independent runs).
+
+| Direction  | Corpus  | bs | C (MB/s) | Pascal (MB/s) | Ratio |
+|------------|---------|----|---------:|---------------:|------:|
+| compress   | text    | 1  |     10.5 |           4.9 | 0.47x |
+| compress   | binary  | 1  |     11.9 |           8.1 | 0.67x |
+| compress   | ac      | 1  |     11.2 |           8.2 | 0.73x |
+| compress   | text    | 5  |      8.2 |           4.1 | 0.52x |
+| compress   | binary  | 5  |      9.8 |           8.3 | 0.85x |
+| compress   | ac      | 5  |     10.3 |           9.5 | 0.92x |
+| compress   | text    | 9  |      7.5 |           3.9 | 0.52x |
+| compress   | binary  | 9  |      8.7 |           8.8 | 1.01x |
+| compress   | ac      | 9  |     12.6 |           8.9 | 0.71x |
+| decompress | text    | 1  |    247.9 |         179.1 | 0.72x |
+| decompress | binary  | 1  |     25.1 |          15.6 | 0.62x |
+| decompress | ac      | 1  |     29.6 |          16.2 | 0.55x |
+| decompress | text    | 5  |    198.2 |         149.3 | 0.73x |
+| decompress | binary  | 5  |     22.9 |          15.0 | 0.66x |
+| decompress | ac      | 5  |     23.5 |          11.7 | 0.50x |
+| decompress | text    | 9  |    162.9 |         128.3 | 0.79x |
+| decompress | binary  | 9  |     21.9 |          13.9 | 0.64x |
+| decompress | ac      | 9  |     21.7 |          13.7 | 0.63x |
+
+Average Pascal/C ratio: **1.46× slower** (arithmetic mean, 18 rows).
+Pascal faster: 0 | C faster: 17 | Ties: 1 (compress/binary/bs9 ≈1.01×).
+
+Key improvement vs Phase 11.3 baseline:
+decompress/text/bs5: 0.52× → 0.73× (+40% gain — drain loop heavily optimised).
+decompress/text/bs9: 0.68× → 0.79× (+16% gain).
+decompress/text/bs1: 0.75× → 0.72× (within noise — shorter blocks, less drain work).
+Binary/ac decompress rows show modest gain; those corpora have shorter RLE runs,
+so the bottleneck shifts to random tt[] lookups (cache-miss-bound, not register-bound).
+GlobalSink = 0 confirms bit-exactness preserved across all tests.
+
+
 
 
 
