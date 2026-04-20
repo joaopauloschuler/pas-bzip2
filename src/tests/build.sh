@@ -66,6 +66,11 @@ compile_test TestBitExactness
 compile_test TestCrossCompat
 compile_test Benchmark
 
+echo
+echo "Compiling bzip2.pas ..."
+fpc $FPC_FLAGS $SRC_DIR/bzip2.pas
+echo "bzip2 compiled -> $BIN_DIR/bzip2"
+
 # ---- Clean compiled Pascal artifacts ----
 find "$SRC_DIR"    -maxdepth 2 \( -name '*.ppu' -o -name '*.o' -o -name '*.compiled' \) -delete
 find "$BIN_DIR"    -maxdepth 1 \( -name '*.ppu' -o -name '*.o' -o -name '*.compiled' \) -delete
@@ -82,3 +87,7 @@ echo "  LD_LIBRARY_PATH=$SRC_DIR $BIN_DIR/TestReferenceVectors"
 echo "  LD_LIBRARY_PATH=$SRC_DIR $BIN_DIR/TestBitExactness"
 echo "  LD_LIBRARY_PATH=$SRC_DIR $BIN_DIR/TestCrossCompat"
 echo "  LD_LIBRARY_PATH=$SRC_DIR $BIN_DIR/Benchmark"
+echo
+echo "Run bzip2 with:"
+echo "  LD_LIBRARY_PATH=$SRC_DIR $BIN_DIR/bzip2 --help"
+echo "  echo 'hello' | LD_LIBRARY_PATH=$SRC_DIR $BIN_DIR/bzip2 -c | LD_LIBRARY_PATH=$SRC_DIR $BIN_DIR/bzip2 -d"
