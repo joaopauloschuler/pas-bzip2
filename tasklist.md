@@ -440,15 +440,28 @@ Acceptance tests for the whole port.
 
 Only begin once everything above is green.
 
-- [ ] **10.1** Port `bzip2.c` to `src/bzip2.pas` as a program that links in
+- [X] **10.1** Port `bzip2.c` to `src/bzip2.pas` as a program that links in
   `pasbzip2.pas`. Mimic the CLI flags, exit codes, and stderr messages of the
   reference `bzip2` binary.
+  Implementation notes:
+  - Uses `THandle` (POSIX fd) throughout instead of `FILE*`; `fpOpen/fpRead/fpWrite/fpClose` from `BaseUnix`
+  - Signal handlers: SIGINT, SIGTERM, SIGHUP (via `fpSignal`), SIGSEGV, SIGBUS
+  - `myfeof` uses `fpRead` + `fpLSeek(-1, SEEK_CUR)` for non-seekable fds (stdin); falls back gracefully
+  - File metadata preservation (permissions, timestamps) via `fpFchmod`, `fpFchown`, `FpUtime`
+  - `fopen_output_safely` maps to `fpOpen(..., O_WRONLY or O_CREAT or O_EXCL, S_IWUSR or S_IRUSR)`
+  - All CLI flags including long flags (`--decompress`, `--fast`, `--best`, etc.)
+  - `progName` detected from `argv[0]` for bunzip2/bzcat behaviour
+  - `build.sh` updated to compile `bzip2.pas`
 
-- [ ] **10.2** Integration test: run `bin/bzip2 -9 sample.txt && bzip2 -d sample.txt.bz2`
+- [X] **10.2** Integration test: run `bin/bzip2 -9 sample.txt && bzip2 -d sample.txt.bz2`
   and compare the recovered file to the original for a corpus of inputs.
+  Results: text, binary, F2F, stdin→stdout, block sizes 1/5/9 all pass.
+  Bit-exact output vs C `bzip2` confirmed (`diff` clean on sample.txt.bz2).
+  Sample vectors sample1/2/3 decompress correctly via the CLI.
 
-- [ ] **10.3** Exit-code parity with reference: feed corrupted inputs and confirm the
+- [X] **10.3** Exit-code parity with reference: feed corrupted inputs and confirm the
   Pascal CLI returns the same exit codes as the C CLI.
+  Results: exit 0 (valid), exit 1 (nonexistent file), exit 2 (corrupt data) — all match C reference.
 
 ---
 
