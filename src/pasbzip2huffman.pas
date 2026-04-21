@@ -42,15 +42,20 @@ var
   heap   : array[0..BZ_MAX_ALPHA_SIZE + 1] of Int32;
   weight : array[0..BZ_MAX_ALPHA_SIZE * 2 - 1] of Int32;
   parent : array[0..BZ_MAX_ALPHA_SIZE * 2 - 1] of Int32;
+  { Phase 11.14: cache weight base pointer to encourage FPC to keep it in a
+    callee-saved register, eliminating repeated leaq offset(%rsp) computations
+    in the UPHEAP/DOWNHEAP inner loops. }
+  weight_: PInt32;
 begin
+  weight_ := @weight[0];
   // Initialise weights: leaf weight = freq (at least 1), packed in high 24 bits;
   // depth (low 8 bits) = 0.
   for i := 0 to alphaSize - 1 do
   begin
     if freq[i] = 0 then
-      weight[i + 1] := 1 shl 8
+      weight_[i + 1] := 1 shl 8
     else
-      weight[i + 1] := freq[i] shl 8;
+      weight_[i + 1] := freq[i] shl 8;
   end;
 
   while True do
@@ -58,9 +63,9 @@ begin
     nNodes := alphaSize;
     nHeap  := 0;
 
-    heap[0]   := 0;
-    weight[0] := 0;
-    parent[0] := -2;
+    heap[0]    := 0;
+    weight_[0] := 0;
+    parent[0]  := -2;
 
     for i := 1 to alphaSize do
     begin
@@ -69,7 +74,7 @@ begin
       heap[nHeap] := i;
       // UPHEAP inline: sift heap[nHeap] upward
       zz := nHeap; tmp := heap[zz];
-      while weight[tmp] < weight[heap[zz shr 1]] do
+      while weight_[tmp] < weight_[heap[zz shr 1]] do
       begin
         heap[zz] := heap[zz shr 1];
         zz := zz shr 1;
@@ -87,8 +92,8 @@ begin
       begin
         yy := zz shl 1;
         if yy > nHeap then Break;
-        if (yy < nHeap) and (weight[heap[yy + 1]] < weight[heap[yy]]) then Inc(yy);
-        if weight[tmp] < weight[heap[yy]] then Break;
+        if (yy < nHeap) and (weight_[heap[yy + 1]] < weight_[heap[yy]]) then Inc(yy);
+        if weight_[tmp] < weight_[heap[yy]] then Break;
         heap[zz] := heap[yy]; zz := yy;
       end;
       heap[zz] := tmp;
@@ -101,8 +106,8 @@ begin
       begin
         yy := zz shl 1;
         if yy > nHeap then Break;
-        if (yy < nHeap) and (weight[heap[yy + 1]] < weight[heap[yy]]) then Inc(yy);
-        if weight[tmp] < weight[heap[yy]] then Break;
+        if (yy < nHeap) and (weight_[heap[yy + 1]] < weight_[heap[yy]]) then Inc(yy);
+        if weight_[tmp] < weight_[heap[yy]] then Break;
         heap[zz] := heap[yy]; zz := yy;
       end;
       heap[zz] := tmp;
@@ -110,19 +115,19 @@ begin
       Inc(nNodes);
       parent[n1] := nNodes;
       parent[n2] := nNodes;
-      // ADDWEIGHTS: sum high-24-bit weights, depth = 1 + max(depth(n1), depth(n2))
-      d1 := weight[n1] and $FF;
-      d2 := weight[n2] and $FF;
-      if d1 > d2 then
-        weight[nNodes] := ((weight[n1] and $FFFFFF00) + (weight[n2] and $FFFFFF00)) or (1 + d1)
-      else
-        weight[nNodes] := ((weight[n1] and $FFFFFF00) + (weight[n2] and $FFFFFF00)) or (1 + d2);
+      // ADDWEIGHTS: sum weight parts (high 24 bits), depth = 1 + max(d1,d2).
+      // Since depths fit in 8 bits (max ~20), their sum never carries into bit 8,
+      // so (w1 and $FFFFFF00) + (w2 and $FFFFFF00) = (w1+w2) and $FFFFFF00.
+      d1 := weight_[n1] and $FF;
+      d2 := weight_[n2] and $FF;
+      if d2 > d1 then d1 := d2;  { d1 = max(d1, d2) }
+      weight_[nNodes] := ((weight_[n1] + weight_[n2]) and Int32($FFFFFF00)) or (1 + d1);
       parent[nNodes] := -1;
       Inc(nHeap);
       heap[nHeap] := nNodes;
       // UPHEAP inline: sift the new internal node upward
       zz := nHeap; tmp := heap[zz];
-      while weight[tmp] < weight[heap[zz shr 1]] do
+      while weight_[tmp] < weight_[heap[zz shr 1]] do
       begin
         heap[zz] := heap[zz shr 1];
         zz := zz shr 1;
@@ -149,9 +154,9 @@ begin
     // Scale down weights to prevent overflow (same logic as C)
     for i := 1 to alphaSize do
     begin
-      j := weight[i] shr 8;
+      j := weight_[i] shr 8;
       j := 1 + (j div 2);
-      weight[i] := j shl 8;
+      weight_[i] := j shl 8;
     end;
   end;
 end;
@@ -191,12 +196,14 @@ procedure BZ2_hbCreateDecodeTables(limit, base, perm: PInt32;
     length: PUChar; minLen, maxLen, alphaSize: Int32);
 var
   pp, i, j, vec: Int32;
-  { counting-sort temporaries: start[k] = first perm index for bit-length k }
+  { counting-sort temporaries: start[k] = first perm index for bit-length k.
+    Only start[minLen..maxLen] is used; FPC warns about partial init but
+    length[j] is always in minLen..maxLen so uninitialized slots are safe. }
   start: array[0..BZ_MAX_CODE_LEN] of Int32;
 begin
   { ---- Build perm[] via counting sort: O(alphaSize + range) ---- }
   { zero the count array for lengths minLen..maxLen }
-  for i := minLen to maxLen do start[i] := 0;
+  FillDWord(start, BZ_MAX_CODE_LEN + 1, 0);  { zero all slots to silence warning }
   { count symbols at each length }
   for j := 0 to alphaSize - 1 do
     Inc(start[length[j]]);
