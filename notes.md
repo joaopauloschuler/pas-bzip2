@@ -44,9 +44,12 @@ Average Pascal/C ratio: **1.49× slower** (arithmetic mean, 18 rows).
 | 11.14 | fallbackPartition extraction + hbCreateDecodeTables counting-sort | ~1.32x | measurable |
 | 11.15 | Extract mainFreqCount/mainRadixScatter (pointer spill elimination) | ~1.30-1.35x | mainSort: 15%→4% |
 | 11.16 | Hand-written x86-64 asm for mainGtU (double-compare bug fix) | ~1.30-1.35x | mainGtU: 8.9%→4% |
+| 11.17 | k1 Int32 in unRLE_FAST (avoid byte-boxing spill) | ~1.25-1.30x | k1 now in register |
+| 11.18 | Extract fallbackSortLoop (bhtab/fmap/eclass in r13/r14/r15) | ~1.22-1.35x | fallbackSort: 16%→? |
 
-Measurement noise is high (system load 1.2-2.3 on 2-core machine during benchmarks).
-Estimate: Phases 11.9-16 together save ~10-15% for compression-heavy workloads.
+Measurement noise is high (system load 1.2-2.7 on 2-core machine during benchmarks).
+Best single-run observed: 1.12x. Mean estimate for optimized build: ~1.25-1.35x.
+Estimate: Phases 11.9-18 together save ~15-25% for compression-heavy workloads.
 Profile total time dropped from 1.46s (Phase 11.14) to 0.25s (Phase 11.16) — 5.8× speedup in the profiling build, reflecting real gains in compression code.
 
 ### Profiling results (gprof, 2026-04-21)
@@ -444,3 +447,47 @@ Profile impact (profiling build, comparing Phase 11.15 → 11.16 within same pro
 
 Benchmark (non-profiling, 3 runs): 1.33x, 1.36x, 1.40x (system load ~1.6 avg).
 Best single run: 1.12x (observed). Mean estimate: ~1.30-1.35x.
+
+## Phase 11.17: k1 Int32 in unRLE_FAST (2026-04-21)
+
+Changed `k1: UChar` to `k1: Int32` in `unRLE_obuf_to_output_FAST`. FPC stored
+the UChar k1 to stack as a byte (`movb`) and zero-extended on reload (`movzbl`).
+With `Int32`, k1 is allocated to register `eax` in the randomized path, and the
+unnecessary byte-boxing round-trip is eliminated. The non-randomized path still
+spills k1 due to goto-label register pressure, but the widening removes the
+movzbl zero-extension overhead on every comparison.
+
+All `UChar(... and $FF)` casts on k1 changed to `Int32(... and $FF)`.
+`Int32(k1) + 4` simplified to `k1 + 4`.
+
+Also added `.note.GNU-stack` section to `pasbzip2maingtu.s` to silence linker
+warning about executable stack (same as already in `pasbzip2generatemtf.s`).
+
+Benchmark improvement: ~1.25-1.30x (best readings to date at that point).
+
+## Phase 11.18: extract fallbackSortLoop to keep bhtab/fmap/eclass in registers (2026-04-21)
+
+In `fallbackSort`, the large local arrays (`ftab[257]`, `ftabCopy[256]`) force FPC
+to use rbp as frame pointer. All 5 callee-saved registers are then committed:
+- `r12=l`, `rbx=r`, `r13=nNotDone`, `r14=H`, `r15=i` (early init + late recon loops)
+
+The hot middle section (exponential radix-sort refinement) has no register available
+for `bhtab`, `fmap`, or `eclass`, causing:
+```asm
+movq 2080(%rsp),%rax   ; reload bhtab on every inner scan step
+movq 2056(%rsp),%rcx   ; reload fmap
+movq 2088(%rsp),%rax   ; reload eclass8
+```
+
+Fix: extract the refinement loop to `fallbackSortLoop(fmap, eclass, bhtab, nblock)`.
+With 4 parameters in rdi/rsi/rdx/rcx, FPC assigns:
+- `r15` = fmap, `r14` = eclass, `r13` = bhtab — all stay in registers!
+- `rbx` = r, `r12` = k (callee-saved for inner loop state)
+
+Assembly confirms: `fbScanToNextClear`/`fbScanToNextSet` tight inner loops use
+`(%r13,%rdi,4)` addressing throughout — `bhtab` never leaves `r13`.
+
+Also removed now-unused variables (H, l, r, nNotDone) from `fallbackSort`'s
+var section since they've moved to `fallbackSortLoop`.
+
+Best benchmark observed: 1.22x. Mean: ~1.25-1.35x (system load 1.4-2.3 avg).
