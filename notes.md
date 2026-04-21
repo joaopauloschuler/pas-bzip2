@@ -29,6 +29,21 @@ Build flags: `-O3 -dAVX2 -CfAVX2 -CpCOREAVX -OpCOREAVX`
 
 Average Pascal/C ratio: **1.49× slower** (arithmetic mean, 18 rows).
 
+### Summary of optimizations and results
+
+| Phase | What | Avg ratio | Improvement |
+|-------|------|-----------|-------------|
+| 11.6  | Baseline (remove mainGtU inline) | 1.49x | — |
+| 11.7  | Hand-written x86-64 ASM for generateMTFValues | ~1.39x | ~7% |
+| 11.8  | Cache bsBuff/bsLive/strm locals in BZ2_decompress | ~1.32x | ~5% |
+| 11.9  | Inline BH bitfield ops in fallbackSort (remove Bool boxing) | — | — |
+| 11.10 | Extract fbScanToNextClear/Set helpers (k in register) | — | — |
+| 11.11 | Extract fbAssignBucketIDs/fbMarkBucketHeaders (i in register) | — | — |
+| 11.12 | Eliminate fswap/fvswap closures in fallbackQSort3 | ~1.28-1.35x | ~3-5% |
+
+Measurement noise is high (system load 1.2-2.3 on 2-core machine during benchmarks).
+Estimate: Phases 11.9-12 together save ~3-5% for compression-heavy workloads.
+
 ### Profiling results (gprof, 2026-04-21)
 
 Top hotspots:
