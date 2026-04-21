@@ -384,6 +384,19 @@ end;
 // stack (reloaded 2× per byte comparison) because mainSimpleSort had too many
 // live variables. The function-call overhead (~14 cycles) is outweighed by the
 // savings on comparisons longer than ~5 bytes.
+//
+// Phase 11.16: when compiled with -dAVX2, the implementation is provided by
+// hand-written x86-64 assembly in pasbzip2maingtu.s that eliminates the double-
+// compare FPC bug (FPC emits `cmpb; je; cmpb; setbb` — the second cmpb is
+// redundant since flags are unchanged). Each char comparison becomes:
+//   cmpb; jne → at .Lret_char: setb; ret
+// saving one `cmpb` per comparison (fired ~12+ times per call, 66M calls total).
+{$IFDEF AVX2}
+{$L pasbzip2maingtu.o}
+function mainGtU(i1, i2: UInt32; block: PUChar; quadrant: PUInt16;
+                 nblock: UInt32; budget: PInt32): Bool;
+  external name 'PASBZIP2BLOCKSORT_$$_MAINGTU$LONGWORD$LONGWORD$PUCHAR$PWORD$LONGWORD$PLONGINT$$BYTE';
+{$ELSE}
 function mainGtU(i1, i2: UInt32; block: PUChar; quadrant: PUInt16;
                  nblock: UInt32; budget: PInt32): Bool;
 var
@@ -483,6 +496,7 @@ begin
 
   mainGtU := BZ_FALSE;
 end;
+{$ENDIF AVX2}
 
 procedure mainSimpleSort(ptr: PUInt32; block: PUChar; quadrant: PUInt16;
                          nblock, lo, hi, d: Int32; budget: PInt32);

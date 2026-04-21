@@ -51,6 +51,8 @@ if echo "$FPC_FLAGS" | grep -q '\-dAVX2'; then
   echo "Assembling hand-written asm objects for AVX2 build..."
   as -o "$SRC_DIR/pasbzip2generatemtf.o" "$SRC_DIR/pasbzip2generatemtf.s"
   echo "  pasbzip2generatemtf.o assembled OK"
+  as -o "$SRC_DIR/pasbzip2maingtu.o" "$SRC_DIR/pasbzip2maingtu.s"
+  echo "  pasbzip2maingtu.o assembled OK"
 fi
 
 compile_test() {
@@ -84,7 +86,8 @@ echo "bzip2 compiled -> $BIN_DIR/bzip2"
 # compiled output needed for linking — both are excluded from deletion.
 find "$SRC_DIR"    -maxdepth 2 \( -name '*.ppu' -o -name '*.compiled' \) -delete
 find "$SRC_DIR"    -maxdepth 2 \( -name '*.o' -o -name '*.s' \) \
-     ! -name 'libbz2.so' ! -name 'pasbzip2generatemtf.s' ! -name 'pasbzip2generatemtf.o' -delete
+     ! -name 'libbz2.so' ! -name 'pasbzip2generatemtf.s' ! -name 'pasbzip2generatemtf.o' \
+     ! -name 'pasbzip2maingtu.s' ! -name 'pasbzip2maingtu.o' -delete
 find "$BIN_DIR"    -maxdepth 1 \( -name '*.ppu' -o -name '*.o' -o -name '*.compiled' -o -name '*.s' \) -delete
 find "$SCRIPT_DIR" -maxdepth 1 \( -name '*.ppu' -o -name '*.o' -o -name '*.compiled' -o -name '*.s' \) -delete
 
