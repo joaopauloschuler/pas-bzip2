@@ -212,3 +212,24 @@ Between the two scan calls (Clear→Set), `k` is still briefly stored to and loa
 from stack, but this is 2 memory ops total instead of 2N memory ops over the scan.
 `bhtab_` is still loaded from `2080(%rsp)` once per bit test (not avoidable without
 ASM since all registers are committed in the outer frame).
+
+## Phase 11.11: extract fbAssignBucketIDs/fbMarkBucketHeaders helpers (2026-04-21)
+
+Same technique applied to the other two hot loops inside `fallbackSort`:
+
+1. `for i := 0 to nblock-1 do` (bucket ID assignment): extracted to `fbAssignBucketIDs`.
+   Before: `i` spilled to `2112(%rsp)`, incremented with `addq $1,2112(%rsp)`.
+   After: `i` = r10d, incremented with `addl $1,%edi`. FPC also generates a `cmovne`
+   instead of a branch for `if ISSET_BH(i) then j := i` — matching GCC quality.
+
+2. `for i := l to r do` (header-bit scan): extracted to `fbMarkBucketHeaders`.
+   Before: `i` spilled to `2112(%rsp)`, `eclass[fmap[i]]` computed twice per taken branch.
+   After: `i` = edi, incremented with `addl $1,%edi`. Added explicit `ec` local variable
+   so `eclass[fmap[i]]` is computed once and reused (eliminates duplicate load pair).
+
+Both helpers use `inline` and are confirmed inlined at their callsites (no `call`
+instructions generated for them in `fallbackSort`'s body).
+
+The `cc` and `cc1` variables are now local to the extracted helpers, freeing two
+slots in the outer `fallbackSort` register frame. With `cc` gone, `H` moves from
+r15d to r14d, leaving `r15` fully available for future use.

@@ -193,6 +193,41 @@ begin
   end;
 end;
 
+// Assign bucket IDs for one refinement level. Extracted from fallbackSort so
+// FPC can keep i in a register (the outer frame commits all callee-saves).
+// For each position i: if BH[i] is set, that position starts a new bucket (j := i).
+// We write: eclass[fmap[i] - H mod nblock] := j  (the bucket-start position).
+procedure fbAssignBucketIDs(fmap: PUInt32; eclass: PUInt32; bhtab: PUInt32;
+                             nblock: Int32; H: Int32); inline;
+var
+  i, j, k: Int32;
+begin
+  j := 0;
+  for i := 0 to nblock-1 do begin
+    if (bhtab[i shr 5] and (UInt32(1) shl (i and 31))) <> 0 then j := i;
+    k := Int32(fmap[i]) - H;
+    if k < 0 then Inc(k, nblock);
+    eclass[k] := UInt32(j);
+  end;
+end;
+
+// Scan a sorted bucket [l..r] and set BH header bits where the sort key changes.
+// Extracted from fallbackSort so FPC can keep i in a register.
+procedure fbMarkBucketHeaders(fmap: PUInt32; eclass: PUInt32; bhtab: PUInt32;
+                               l: Int32; r: Int32); inline;
+var
+  i, cc, ec: Int32;
+begin
+  cc := -1;
+  for i := l to r do begin
+    ec := Int32(eclass[fmap[i]]);  // compute once; avoids double load on branch taken
+    if cc <> ec then begin
+      cc := ec;
+      bhtab[i shr 5] := bhtab[i shr 5] or (UInt32(1) shl (i and 31));
+    end;
+  end;
+end;
+
 // Scan forward past all set BH bits (find the first clear bit >= k).
 // Extracted from fallbackSort so FPC can keep bhtab/k in registers here.
 function fbScanToNextClear(bhtab: PUInt32; k: Int32): Int32; inline;
@@ -223,12 +258,12 @@ procedure fallbackSort(fmap: PUInt32; eclass: PUInt32; bhtab: PUInt32;
 var
   ftab:     array[0..256] of Int32;
   ftabCopy: array[0..255] of Int32;
-  H, i, j, k, l, r, cc: Int32;
+  H, i, j, k, l, r: Int32;
   nNotDone: Int32;
   nBhtab: Int32;
   eclass8: PUChar;
   // Local copy of bhtab pointer; no longer used for closure capture.
-  // cc1 eliminated to free a callee-saved register.
+  // cc, cc1 eliminated — those vars now live in the extracted helper functions.
   bhtab_: PUInt32;
 
 begin
@@ -265,14 +300,9 @@ begin
   // Exponential radix sort — log(N) refinement loop
   H := 1;
   while True do begin
-    j := 0;
-    for i := 0 to nblock-1 do begin
-      // ISSET_BH(i) <> 0  inlined as boolean
-      if (bhtab_[i shr 5] and (UInt32(1) shl (i and 31))) <> 0 then j := i;
-      k := Int32(fmap[i]) - H;
-      if k < 0 then Inc(k, nblock);
-      eclass[k] := UInt32(j);
-    end;
+    // Assign bucket IDs: for each i, write j (the last BH-set index ≤ i) into
+    // eclass[fmap[i]-H mod nblock]. Extracted so FPC keeps i in a register.
+    fbAssignBucketIDs(fmap, eclass, bhtab_, nblock, H);
 
     nNotDone := 0;
     r := -1;
@@ -291,14 +321,9 @@ begin
       if r > l then begin
         Inc(nNotDone, r - l + 1);
         fallbackQSort3(fmap, eclass, l, r);
-        // Scan bucket and generate header bits — SET_BH(i) inlined; cc1 eliminated
-        cc := -1;
-        for i := l to r do begin
-          if cc <> Int32(eclass[fmap[i]]) then begin
-            cc := Int32(eclass[fmap[i]]);
-            bhtab_[i shr 5] := bhtab_[i shr 5] or (UInt32(1) shl (i and 31));
-          end;
-        end;
+        // Scan bucket and set BH header bits where sort key changes.
+        // Extracted so FPC keeps i in a register.
+        fbMarkBucketHeaders(fmap, eclass, bhtab_, l, r);
       end;
     end;
 
