@@ -666,6 +666,74 @@ begin
   end;
 end;
 
+{ Phase 11.15: Extract frequency-count and radix-scatter loops from mainSort
+  so FPC can keep block/quadrant/ftab/ptr in registers within each helper.
+  In the full mainSort frame, these pointers are spilled to the stack because
+  all 5 callee-saved registers are consumed by loop induction variables.
+  In each helper frame, FPC assigns the pointer parameters to dedicated
+  callee-saved registers (rdi/rsi/rdx/rcx stay live, r12/r13/r14/r15 for
+  the remainder), eliminating repeated stack reloads per iteration. }
+
+{ Count bigram frequencies and zero quadrant[].
+  ftab[65537] must already be zeroed by caller.
+  NOT inline: called as a regular function so FPC gives its frame its own
+  register allocation, keeping block/quadrant/ftab in dedicated registers. }
+procedure mainFreqCount(block: PUChar; quadrant: PUInt16;
+                        ftab: PUInt32; nblock: Int32);
+var
+  i, j: Int32;
+begin
+  j := Int32(block[0]) shl 8;
+  i := nblock - 1;
+  while i >= 3 do begin
+    quadrant[i]   := 0;
+    j := (j shr 8) or (Int32(block[i])   shl 8); Inc(ftab[j]);
+    quadrant[i-1] := 0;
+    j := (j shr 8) or (Int32(block[i-1]) shl 8); Inc(ftab[j]);
+    quadrant[i-2] := 0;
+    j := (j shr 8) or (Int32(block[i-2]) shl 8); Inc(ftab[j]);
+    quadrant[i-3] := 0;
+    j := (j shr 8) or (Int32(block[i-3]) shl 8); Inc(ftab[j]);
+    Dec(i, 4);
+  end;
+  while i >= 0 do begin
+    quadrant[i] := 0;
+    j := (j shr 8) or (Int32(block[i]) shl 8);
+    Inc(ftab[j]);
+    Dec(i);
+  end;
+end;
+
+{ Initial radix scatter: place each suffix into its bucket.
+  ftab[] must already hold cumulative counts (prefix sums).
+  Writes suffix indices into ptr[] in reverse order.
+  NOT inline: called as a regular function for its own register frame. }
+procedure mainRadixScatter(block: PUChar; ftab: PUInt32;
+                            ptr: PUInt32; nblock: Int32);
+var
+  i, j: Int32;
+  s: UInt16;
+begin
+  s := UInt16(Int32(block[0]) shl 8);
+  i := nblock - 1;
+  while i >= 3 do begin
+    s := UInt16((Int32(s) shr 8) or (Int32(block[i])   shl 8));
+    j := Int32(ftab[s]) - 1; ftab[s] := UInt32(j); ptr[j] := UInt32(i);
+    s := UInt16((Int32(s) shr 8) or (Int32(block[i-1]) shl 8));
+    j := Int32(ftab[s]) - 1; ftab[s] := UInt32(j); ptr[j] := UInt32(i-1);
+    s := UInt16((Int32(s) shr 8) or (Int32(block[i-2]) shl 8));
+    j := Int32(ftab[s]) - 1; ftab[s] := UInt32(j); ptr[j] := UInt32(i-2);
+    s := UInt16((Int32(s) shr 8) or (Int32(block[i-3]) shl 8));
+    j := Int32(ftab[s]) - 1; ftab[s] := UInt32(j); ptr[j] := UInt32(i-3);
+    Dec(i, 4);
+  end;
+  while i >= 0 do begin
+    s := UInt16((Int32(s) shr 8) or (Int32(block[i]) shl 8));
+    j := Int32(ftab[s]) - 1; ftab[s] := UInt32(j); ptr[j] := UInt32(i);
+    Dec(i);
+  end;
+end;
+
 procedure mainSort(ptr: PUInt32; block: PUChar; quadrant: PUInt16;
                    ftab: PUInt32; nblock: Int32; {%H-}verb: Int32; budget: PInt32);
 var
@@ -676,7 +744,6 @@ var
   copyEnd:      array[0..255] of Int32;
   c1: UChar;
   numQSorted: Int32;
-  s: UInt16;
   lo, hi: Int32;
   vv: Int32;
   h: Int32;
@@ -692,25 +759,9 @@ begin
   // Set up 2-byte frequency table
   for i := 65536 downto 0 do ftab_[i] := 0;
 
-  j := Int32(block[0]) shl 8;
-  i := nblock - 1;
-  while i >= 3 do begin
-    quadrant[i] := 0;
-    j := (j shr 8) or (Int32(block[i]) shl 8);   Inc(ftab_[j]);
-    quadrant[i-1] := 0;
-    j := (j shr 8) or (Int32(block[i-1]) shl 8); Inc(ftab_[j]);
-    quadrant[i-2] := 0;
-    j := (j shr 8) or (Int32(block[i-2]) shl 8); Inc(ftab_[j]);
-    quadrant[i-3] := 0;
-    j := (j shr 8) or (Int32(block[i-3]) shl 8); Inc(ftab_[j]);
-    Dec(i, 4);
-  end;
-  while i >= 0 do begin
-    quadrant[i] := 0;
-    j := (j shr 8) or (Int32(block[i]) shl 8);
-    Inc(ftab_[j]);
-    Dec(i);
-  end;
+  // Phase 11.15: hot frequency-count loop extracted to mainFreqCount so FPC
+  // can keep block/quadrant/ftab in registers (not spilled in mainSort frame).
+  mainFreqCount(block, quadrant, ftab_, nblock);
 
   for i := 0 to BZ_N_OVERSHOOT-1 do begin
     block[nblock+i]    := block[i];
@@ -720,24 +771,8 @@ begin
   // Complete initial radix sort
   for i := 1 to 65536 do ftab_[i] := ftab_[i] + ftab_[i-1];
 
-  s := UInt16(Int32(block[0]) shl 8);
-  i := nblock - 1;
-  while i >= 3 do begin
-    s := UInt16((Int32(s) shr 8) or (Int32(block[i])   shl 8));
-    j := Int32(ftab_[s]) - 1; ftab_[s] := UInt32(j); ptr[j] := UInt32(i);
-    s := UInt16((Int32(s) shr 8) or (Int32(block[i-1]) shl 8));
-    j := Int32(ftab_[s]) - 1; ftab_[s] := UInt32(j); ptr[j] := UInt32(i-1);
-    s := UInt16((Int32(s) shr 8) or (Int32(block[i-2]) shl 8));
-    j := Int32(ftab_[s]) - 1; ftab_[s] := UInt32(j); ptr[j] := UInt32(i-2);
-    s := UInt16((Int32(s) shr 8) or (Int32(block[i-3]) shl 8));
-    j := Int32(ftab_[s]) - 1; ftab_[s] := UInt32(j); ptr[j] := UInt32(i-3);
-    Dec(i, 4);
-  end;
-  while i >= 0 do begin
-    s := UInt16((Int32(s) shr 8) or (Int32(block[i]) shl 8));
-    j := Int32(ftab_[s]) - 1; ftab_[s] := UInt32(j); ptr[j] := UInt32(i);
-    Dec(i);
-  end;
+  // Phase 11.15: hot radix-scatter loop extracted to mainRadixScatter.
+  mainRadixScatter(block, ftab_, ptr, nblock);
 
   // Calculate running order (smallest to largest big bucket) via shell sort
   for i := 0 to 255 do begin
