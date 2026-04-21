@@ -110,7 +110,12 @@ function unRLE_obuf_to_output_FAST(s: PDState): Bool;
 label
   L_RETURN_NOTR, L_SAVE;
 var
-  k1               : UChar;
+  { Phase 11.17: k1 declared as Int32 instead of UChar to avoid byte-boxing
+    overhead. FPC stored the UChar k1 to 16(%rsp) as a byte and zero-extended
+    on reload (movb; movzbl). With Int32, FPC can keep k1 in a 32-bit register
+    and avoid the stack round-trip. All k1 usages are compared against c_k0
+    (Int32) or stored back to c_k0 (Int32), so the widening is lossless. }
+  k1               : Int32;
   strm             : Pbz_stream;
   { cached locals for the non-randomised fast path (BZ_GET_FAST_C pattern) }
   c_crc            : UInt32;
@@ -156,7 +161,7 @@ begin
       { BZ_GET_FAST(k1) }
       if s^.tPos >= UInt32(100000) * UInt32(s^.blockSize100k) then begin Result := BZ_TRUE; Exit; end;
       s^.tPos := s^.tt[s^.tPos];
-      k1 := UChar(s^.tPos and $FF);
+      k1 := Int32(s^.tPos and $FF);
       s^.tPos := s^.tPos shr 8;
       { BZ_RAND_UPD_MASK; k1 ^= BZ_RAND_MASK }
       if s^.rNToGo = 0 then
@@ -175,7 +180,7 @@ begin
       { BZ_GET_FAST(k1) }
       if s^.tPos >= UInt32(100000) * UInt32(s^.blockSize100k) then begin Result := BZ_TRUE; Exit; end;
       s^.tPos := s^.tt[s^.tPos];
-      k1 := UChar(s^.tPos and $FF);
+      k1 := Int32(s^.tPos and $FF);
       s^.tPos := s^.tPos shr 8;
       if s^.rNToGo = 0 then
       begin
@@ -193,7 +198,7 @@ begin
       { BZ_GET_FAST(k1) }
       if s^.tPos >= UInt32(100000) * UInt32(s^.blockSize100k) then begin Result := BZ_TRUE; Exit; end;
       s^.tPos := s^.tt[s^.tPos];
-      k1 := UChar(s^.tPos and $FF);
+      k1 := Int32(s^.tPos and $FF);
       s^.tPos := s^.tPos shr 8;
       if s^.rNToGo = 0 then
       begin
@@ -210,7 +215,7 @@ begin
       { BZ_GET_FAST(k1) }
       if s^.tPos >= UInt32(100000) * UInt32(s^.blockSize100k) then begin Result := BZ_TRUE; Exit; end;
       s^.tPos := s^.tt[s^.tPos];
-      k1 := UChar(s^.tPos and $FF);
+      k1 := Int32(s^.tPos and $FF);
       s^.tPos := s^.tPos shr 8;
       if s^.rNToGo = 0 then
       begin
@@ -221,7 +226,7 @@ begin
       Dec(s^.rNToGo);
       if s^.rNToGo = 1 then k1 := k1 xor 1;
       Inc(s^.nblock_used);
-      s^.state_out_len := Int32(k1) + 4;
+      s^.state_out_len := k1 + 4;
 
       { BZ_GET_FAST(s^.k0) }
       if s^.tPos >= UInt32(100000) * UInt32(s^.blockSize100k) then begin Result := BZ_TRUE; Exit; end;
@@ -278,7 +283,7 @@ begin
       { BZ_GET_FAST_C(k1) }
       if c_tPos >= UInt32(100000) * UInt32(ro_blockSize100k) then begin Result := BZ_TRUE; goto L_SAVE; end;
       c_tPos := c_tt[c_tPos];
-      k1 := UChar(c_tPos and $FF);
+      k1 := Int32(c_tPos and $FF);
       c_tPos := c_tPos shr 8;
       Inc(c_nblock_used);
       if k1 <> c_k0 then begin c_k0 := k1; c_state_out_len := 1; Continue; end;
@@ -288,7 +293,7 @@ begin
       { BZ_GET_FAST_C(k1) }
       if c_tPos >= UInt32(100000) * UInt32(ro_blockSize100k) then begin Result := BZ_TRUE; goto L_SAVE; end;
       c_tPos := c_tt[c_tPos];
-      k1 := UChar(c_tPos and $FF);
+      k1 := Int32(c_tPos and $FF);
       c_tPos := c_tPos shr 8;
       Inc(c_nblock_used);
       if c_nblock_used = s_save_nblockPP then Continue;
@@ -298,7 +303,7 @@ begin
       { BZ_GET_FAST_C(k1) }
       if c_tPos >= UInt32(100000) * UInt32(ro_blockSize100k) then begin Result := BZ_TRUE; goto L_SAVE; end;
       c_tPos := c_tt[c_tPos];
-      k1 := UChar(c_tPos and $FF);
+      k1 := Int32(c_tPos and $FF);
       c_tPos := c_tPos shr 8;
       Inc(c_nblock_used);
       if c_nblock_used = s_save_nblockPP then Continue;
@@ -307,10 +312,10 @@ begin
       { BZ_GET_FAST_C(k1) }
       if c_tPos >= UInt32(100000) * UInt32(ro_blockSize100k) then begin Result := BZ_TRUE; goto L_SAVE; end;
       c_tPos := c_tt[c_tPos];
-      k1 := UChar(c_tPos and $FF);
+      k1 := Int32(c_tPos and $FF);
       c_tPos := c_tPos shr 8;
       Inc(c_nblock_used);
-      c_state_out_len := Int32(k1) + 4;
+      c_state_out_len := k1 + 4;
 
       { BZ_GET_FAST_C(c_k0) }
       if c_tPos >= UInt32(100000) * UInt32(ro_blockSize100k) then begin Result := BZ_TRUE; goto L_SAVE; end;
@@ -439,7 +444,7 @@ begin
       Dec(s^.rNToGo);
       if s^.rNToGo = 1 then k1 := k1 xor 1;
       Inc(s^.nblock_used);
-      s^.state_out_len := Int32(k1) + 4;
+      s^.state_out_len := k1 + 4;
 
       { BZ_GET_SMALL(s^.k0) }
       if s^.tPos >= UInt32(100000) * UInt32(s^.blockSize100k) then begin Result := BZ_TRUE; Exit; end;
@@ -511,7 +516,7 @@ begin
       k1 := UChar(BZ2_indexIntoF(Int32(s^.tPos), @s^.cftab[0]));
       s^.tPos := GET_LL(s, s^.tPos);
       Inc(s^.nblock_used);
-      s^.state_out_len := Int32(k1) + 4;
+      s^.state_out_len := k1 + 4;
 
       { BZ_GET_SMALL(s^.k0) }
       if s^.tPos >= UInt32(100000) * UInt32(s^.blockSize100k) then begin Result := BZ_TRUE; Exit; end;
