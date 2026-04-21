@@ -151,3 +151,49 @@ The remaining gap requires either hand-written asm for the hot inner decode loop
 or further restructuring to reduce variable count in the hot section.
 
 Note: absolute throughput numbers vary with CPU load; ratios are the meaningful metric.
+
+# fallbackSort
+
+## Root cause analysis (2026-04-21)
+
+`fallbackSort` is the third hotspot at ~10% of runtime. It implements an exponential
+radix sort using a bitfield (`bhtab`) and a quicksort fallback (`fallbackQSort3`).
+
+FPC assembly inspection reveals two problems:
+
+1. **ISSET_BH closure boxing**: The nested procedures `ISSET_BH`, `SET_BH`, `CLEAR_BH`,
+   `WORD_BH`, `UNALIGNED_BH` capture `bhtab` as a closure variable. This forces FPC to
+   store `bhtab` in a stack slot (at `rsp+0`) and reload it on every bit operation.
+   Additionally, `ISSET_BH` returns `Bool` (Byte), which requires materializing the
+   BZ_TRUE/BZ_FALSE constants via symbol table lookups and a final `testb` — generating
+   ~18 instructions per bit test vs GCC's 5 instructions using `shlx`/`testl`.
+
+2. **Stack spilling of k**: The inner bucket-scan loops update `k` in a tight while loop.
+   FPC spills `k` to `2104(%rsp)` and does a load-modify-store (`addq $1,2104(%rsp)`)
+   on each iteration. GCC keeps `k` in a register.
+
+Root cause: All 5 callee-saved GPRs (rbx, r12-r15) are used for `r`, `cc`, `l`,
+`nNotDone`, and `H`, leaving no register for `k` or `bhtab`.
+
+## Phase 11.9 fix (2026-04-21)
+
+Pascal-only optimization:
+1. Removed all nested BH helper procedures (`ISSET_BH`, `SET_BH`, `CLEAR_BH`, `WORD_BH`,
+   `UNALIGNED_BH`) and replaced all callsites with direct inline bitfield expressions.
+   This eliminates Bool boxing (~5 instructions saved per bit test).
+2. Eliminated `cc1` variable by inlining it in the scan loop. This freed `ebx` for
+   register use and changed FPC's allocation: `r` moved from r12d to ebx, `cc` from
+   r13d to r12d, `l` from r14d to r13d, `nNotDone` from r15d to r14d, freeing r15d for `H`.
+3. Added `bhtab_` local variable to document intent (still spilled — FPC exhausts registers).
+
+Instruction count improvement: ~18 → ~13 instructions per bit test (~28% reduction
+in inner loop instruction count for the hot bucket-scan loops).
+
+The remaining gap (stack-spilled `k` and `bhtab_`) requires hand-written assembly
+to fully close, as FPC uses all 6 available callee-save registers for other live values.
+
+## Phase 11.9 benchmark results (2026-04-21)
+
+System was under heavy load during measurement (load avg ~1.2 on 2-core machine),
+making absolute numbers unreliable. Assembly instruction count analysis confirms ~28%
+improvement in the hot bucket-scan loop instruction count.

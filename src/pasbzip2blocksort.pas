@@ -198,32 +198,17 @@ procedure fallbackSort(fmap: PUInt32; eclass: PUInt32; bhtab: PUInt32;
 var
   ftab:     array[0..256] of Int32;
   ftabCopy: array[0..255] of Int32;
-  H, i, j, k, l, r, cc, cc1: Int32;
+  H, i, j, k, l, r, cc: Int32;
   nNotDone: Int32;
   nBhtab: Int32;
   eclass8: PUChar;
-
-  procedure SET_BH(zz: Int32); inline;
-  begin bhtab[zz shr 5] := bhtab[zz shr 5] or  (UInt32(1) shl (zz and 31)); end;
-
-  procedure CLEAR_BH(zz: Int32); inline;
-  begin bhtab[zz shr 5] := bhtab[zz shr 5] and not (UInt32(1) shl (zz and 31)); end;
-
-  function ISSET_BH(zz: Int32): Bool; inline;
-  begin
-    if (bhtab[zz shr 5] and (UInt32(1) shl (zz and 31))) <> 0 then
-      ISSET_BH := BZ_TRUE
-    else
-      ISSET_BH := BZ_FALSE;
-  end;
-
-  function WORD_BH(zz: Int32): UInt32; inline;
-  begin WORD_BH := bhtab[zz shr 5]; end;
-
-  function UNALIGNED_BH(zz: Int32): Int32; inline;
-  begin UNALIGNED_BH := zz and $01F; end;
+  // Local copy of bhtab pointer: avoids closure-capture spilling in nested procs.
+  // With the nested BH helpers removed, FPC can keep bhtab_ in a callee-saved reg.
+  // cc1 is eliminated (was in ebx) to free a callee-saved register for k.
+  bhtab_: PUInt32;
 
 begin
+  bhtab_ := bhtab;
   eclass8 := PUChar(eclass);
 
   // Initial 1-char radix sort to generate fmap and BH bits
@@ -240,13 +225,17 @@ begin
   end;
 
   nBhtab := 2 + (nblock div 32);
-  for i := 0 to nBhtab-1 do bhtab[i] := 0;
-  for i := 0 to 255 do SET_BH(ftab[i]);
+  for i := 0 to nBhtab-1 do bhtab_[i] := 0;
+  // SET_BH inlined: bhtab_[zz shr 5] |= (1 shl (zz and 31))
+  for i := 0 to 255 do
+    bhtab_[ftab[i] shr 5] := bhtab_[ftab[i] shr 5] or (UInt32(1) shl (ftab[i] and 31));
 
-  // Sentinel bits for block-end detection
+  // Sentinel bits for block-end detection — SET_BH / CLEAR_BH inlined
   for i := 0 to 31 do begin
-    SET_BH(nblock + 2*i);
-    CLEAR_BH(nblock + 2*i + 1);
+    j := nblock + 2*i;
+    bhtab_[j shr 5] := bhtab_[j shr 5] or (UInt32(1) shl (j and 31));
+    j := nblock + 2*i + 1;
+    bhtab_[j shr 5] := bhtab_[j shr 5] and not (UInt32(1) shl (j and 31));
   end;
 
   // Exponential radix sort — log(N) refinement loop
@@ -254,7 +243,8 @@ begin
   while True do begin
     j := 0;
     for i := 0 to nblock-1 do begin
-      if ISSET_BH(i) <> 0 then j := i;
+      // ISSET_BH(i) <> 0  inlined as boolean
+      if (bhtab_[i shr 5] and (UInt32(1) shl (i and 31))) <> 0 then j := i;
       k := Int32(fmap[i]) - H;
       if k < 0 then Inc(k, nblock);
       eclass[k] := UInt32(j);
@@ -265,17 +255,21 @@ begin
     while True do begin
       // Find the next non-singleton bucket
       k := r + 1;
-      while (ISSET_BH(k) <> 0) and (UNALIGNED_BH(k) <> 0) do Inc(k);
-      if ISSET_BH(k) <> 0 then begin
-        while WORD_BH(k) = $FFFFFFFF do Inc(k, 32);
-        while ISSET_BH(k) <> 0 do Inc(k);
+      // while (ISSET_BH(k) <> 0) and (UNALIGNED_BH(k) <> 0) do Inc(k)  — inlined
+      while ((bhtab_[k shr 5] and (UInt32(1) shl (k and 31))) <> 0) and ((k and 31) <> 0) do Inc(k);
+      // if ISSET_BH(k) <> 0 then ...  — inlined
+      if (bhtab_[k shr 5] and (UInt32(1) shl (k and 31))) <> 0 then begin
+        while bhtab_[k shr 5] = $FFFFFFFF do Inc(k, 32);
+        while (bhtab_[k shr 5] and (UInt32(1) shl (k and 31))) <> 0 do Inc(k);
       end;
       l := k - 1;
       if l >= nblock then break;
-      while (ISSET_BH(k) = 0) and (UNALIGNED_BH(k) <> 0) do Inc(k);
-      if ISSET_BH(k) = 0 then begin
-        while WORD_BH(k) = $00000000 do Inc(k, 32);
-        while ISSET_BH(k) = 0 do Inc(k);
+      // while (ISSET_BH(k) = 0) and (UNALIGNED_BH(k) <> 0) do Inc(k)  — inlined
+      while ((bhtab_[k shr 5] and (UInt32(1) shl (k and 31))) = 0) and ((k and 31) <> 0) do Inc(k);
+      // if ISSET_BH(k) = 0 then ...  — inlined
+      if (bhtab_[k shr 5] and (UInt32(1) shl (k and 31))) = 0 then begin
+        while bhtab_[k shr 5] = $00000000 do Inc(k, 32);
+        while (bhtab_[k shr 5] and (UInt32(1) shl (k and 31))) = 0 do Inc(k);
       end;
       r := k - 1;
       if r >= nblock then break;
@@ -284,11 +278,13 @@ begin
       if r > l then begin
         Inc(nNotDone, r - l + 1);
         fallbackQSort3(fmap, eclass, l, r);
-        // Scan bucket and generate header bits
+        // Scan bucket and generate header bits — SET_BH(i) inlined; cc1 eliminated
         cc := -1;
         for i := l to r do begin
-          cc1 := Int32(eclass[fmap[i]]);
-          if cc <> cc1 then begin SET_BH(i); cc := cc1; end;
+          if cc <> Int32(eclass[fmap[i]]) then begin
+            cc := Int32(eclass[fmap[i]]);
+            bhtab_[i shr 5] := bhtab_[i shr 5] or (UInt32(1) shl (i and 31));
+          end;
         end;
       end;
     end;
