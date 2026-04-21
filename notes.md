@@ -192,8 +192,23 @@ in inner loop instruction count for the hot bucket-scan loops).
 The remaining gap (stack-spilled `k` and `bhtab_`) requires hand-written assembly
 to fully close, as FPC uses all 6 available callee-save registers for other live values.
 
-## Phase 11.9 benchmark results (2026-04-21)
+## Phase 11.10: extract bucket-scan helpers to eliminate k stack spills (2026-04-21)
 
-System was under heavy load during measurement (load avg ~1.2 on 2-core machine),
-making absolute numbers unreliable. Assembly instruction count analysis confirms ~28%
-improvement in the hot bucket-scan loop instruction count.
+Even though the Phase 11.9 inlining removed Bool boxing, `k` was still spilled to
+`2104(%rsp)` inside the inlined BH scan loops because the outer `fallbackSort` frame
+had all callee-saved registers committed.
+
+Fix: extract `fbScanToNextClear` and `fbScanToNextSet` as standalone (non-nested)
+functions that take `bhtab` and `k` as parameters. FPC inlines these at the callsites
+(confirmed by no `call` instruction), but inside the inlined body FPC can now keep
+`k` in a register (passed as `%edx`, incremented with `addl $1,%edx`) instead of a
+stack slot (`addq $1,2104(%rsp)`).
+
+Key improvement: the tight inner loops `while ISSET_BH(k) <> 0 do Inc(k)` now use
+register increments instead of load-modify-store memory ops. This eliminates the
+two stack loads of `k` per iteration and replaces the memory-add with a register add.
+
+Between the two scan calls (Clear→Set), `k` is still briefly stored to and loaded
+from stack, but this is 2 memory ops total instead of 2N memory ops over the scan.
+`bhtab_` is still loaded from `2080(%rsp)` once per bit test (not avoidable without
+ASM since all registers are committed in the outer frame).

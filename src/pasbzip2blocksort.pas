@@ -193,6 +193,31 @@ begin
   end;
 end;
 
+// Scan forward past all set BH bits (find the first clear bit >= k).
+// Extracted from fallbackSort so FPC can keep bhtab/k in registers here.
+function fbScanToNextClear(bhtab: PUInt32; k: Int32): Int32; inline;
+begin
+  // Advance past any bits that are 1 in the current word
+  while ((bhtab[k shr 5] and (UInt32(1) shl (k and 31))) <> 0) and ((k and 31) <> 0) do Inc(k);
+  if (bhtab[k shr 5] and (UInt32(1) shl (k and 31))) <> 0 then begin
+    while bhtab[k shr 5] = $FFFFFFFF do Inc(k, 32);
+    while (bhtab[k shr 5] and (UInt32(1) shl (k and 31))) <> 0 do Inc(k);
+  end;
+  fbScanToNextClear := k;
+end;
+
+// Scan forward past all clear BH bits (find the first set bit >= k).
+// Extracted from fallbackSort so FPC can keep bhtab/k in registers here.
+function fbScanToNextSet(bhtab: PUInt32; k: Int32): Int32; inline;
+begin
+  while ((bhtab[k shr 5] and (UInt32(1) shl (k and 31))) = 0) and ((k and 31) <> 0) do Inc(k);
+  if (bhtab[k shr 5] and (UInt32(1) shl (k and 31))) = 0 then begin
+    while bhtab[k shr 5] = $00000000 do Inc(k, 32);
+    while (bhtab[k shr 5] and (UInt32(1) shl (k and 31))) = 0 do Inc(k);
+  end;
+  fbScanToNextSet := k;
+end;
+
 procedure fallbackSort(fmap: PUInt32; eclass: PUInt32; bhtab: PUInt32;
                        nblock: Int32; {%H-}verb: Int32);
 var
@@ -202,9 +227,8 @@ var
   nNotDone: Int32;
   nBhtab: Int32;
   eclass8: PUChar;
-  // Local copy of bhtab pointer: avoids closure-capture spilling in nested procs.
-  // With the nested BH helpers removed, FPC can keep bhtab_ in a callee-saved reg.
-  // cc1 is eliminated (was in ebx) to free a callee-saved register for k.
+  // Local copy of bhtab pointer; no longer used for closure capture.
+  // cc1 eliminated to free a callee-saved register.
   bhtab_: PUInt32;
 
 begin
@@ -254,23 +278,12 @@ begin
     r := -1;
     while True do begin
       // Find the next non-singleton bucket
-      k := r + 1;
-      // while (ISSET_BH(k) <> 0) and (UNALIGNED_BH(k) <> 0) do Inc(k)  — inlined
-      while ((bhtab_[k shr 5] and (UInt32(1) shl (k and 31))) <> 0) and ((k and 31) <> 0) do Inc(k);
-      // if ISSET_BH(k) <> 0 then ...  — inlined
-      if (bhtab_[k shr 5] and (UInt32(1) shl (k and 31))) <> 0 then begin
-        while bhtab_[k shr 5] = $FFFFFFFF do Inc(k, 32);
-        while (bhtab_[k shr 5] and (UInt32(1) shl (k and 31))) <> 0 do Inc(k);
-      end;
+      // fbScanToNextClear: advance past set bits to find the bucket start
+      k := fbScanToNextClear(bhtab_, r + 1);
       l := k - 1;
       if l >= nblock then break;
-      // while (ISSET_BH(k) = 0) and (UNALIGNED_BH(k) <> 0) do Inc(k)  — inlined
-      while ((bhtab_[k shr 5] and (UInt32(1) shl (k and 31))) = 0) and ((k and 31) <> 0) do Inc(k);
-      // if ISSET_BH(k) = 0 then ...  — inlined
-      if (bhtab_[k shr 5] and (UInt32(1) shl (k and 31))) = 0 then begin
-        while bhtab_[k shr 5] = $00000000 do Inc(k, 32);
-        while (bhtab_[k shr 5] and (UInt32(1) shl (k and 31))) = 0 do Inc(k);
-      end;
+      // fbScanToNextSet: advance past clear bits to find the bucket end
+      k := fbScanToNextSet(bhtab_, k);
       r := k - 1;
       if r >= nblock then break;
 
