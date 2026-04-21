@@ -1,0 +1,108 @@
+# pas-bzip2 Performance Notes
+
+## Phase 11 — Performance optimization
+
+### Baseline (after Phase 11.6, 2026-04-21)
+
+Build flags: `-O3 -dAVX2 -CfAVX2 -CpCOREAVX -OpCOREAVX`
+
+| Direction  | Corpus  | bs | C (MB/s) | Pascal (MB/s) | Ratio |
+|------------|---------|----|---------:|---------------:|------:|
+| compress   | text    | 1  |     13.3 |           7.2 | 0.54x |
+| compress   | binary  | 1  |     14.9 |          11.3 | 0.76x |
+| compress   | ac      | 1  |     15.2 |          11.5 | 0.76x |
+| compress   | text    | 5  |     10.9 |           5.7 | 0.52x |
+| compress   | binary  | 5  |     15.4 |          11.8 | 0.77x |
+| compress   | ac      | 5  |     13.8 |          11.9 | 0.86x |
+| compress   | text    | 9  |     10.4 |           5.8 | 0.56x |
+| compress   | binary  | 9  |     14.4 |          11.0 | 0.76x |
+| compress   | ac      | 9  |     14.0 |          10.9 | 0.78x |
+| decompress | text    | 1  |    263.2 |         204.1 | 0.78x |
+| decompress | binary  | 1  |     32.2 |          18.2 | 0.57x |
+| decompress | ac      | 1  |     31.6 |          18.3 | 0.58x |
+| decompress | text    | 5  |    250.0 |         181.8 | 0.73x |
+| decompress | binary  | 5  |     27.1 |          15.9 | 0.59x |
+| decompress | ac      | 5  |     26.4 |          17.3 | 0.66x |
+| decompress | text    | 9  |    250.0 |         149.3 | 0.60x |
+| decompress | binary  | 9  |     25.3 |          16.6 | 0.66x |
+| decompress | ac      | 9  |     25.9 |          15.5 | 0.60x |
+
+Average Pascal/C ratio: **1.49× slower** (arithmetic mean, 18 rows).
+
+### Profiling results (gprof, 2026-04-21)
+
+Top hotspots:
+1. **`BZ2_decompress`** — 26.32%
+2. **`generateMTFValues`** — 26.32%
+3. **`fallbackSort`** — 15.79%
+4. **`mainGtU`** — 10.53%
+5. **`fallbackQSort3`** — 5.26%
+6. **`mainSort`** — 5.26%
+7. **`sendMTFValues`** — 5.26%
+8. **`copy_input_until_stop`** — 5.26%
+
+# generateMTFValues
+
+## Root cause analysis (2026-04-21)
+
+FPC assembly inspection (from `-al` output) reveals that all three pointer
+variables `ptr`, `block`, and `mtfv` are assigned to the same register `rax`
+by FPC's register allocator:
+
+```
+# Var ptr located in register rax
+# Var block located in register rax
+# Var mtfv located in register rax
+```
+
+This means FPC cannot keep any of them in a register simultaneously. It spills
+all three to the stack:
+- ptr  → 264(%rsp)
+- block → 272(%rsp)
+- mtfv  → 256(%rsp)
+
+And reloads them on EVERY loop iteration:
+```asm
+movq  264(%rsp),%rax    ; reload ptr from stack
+movl  (%rax,%r13,4),%r13d
+movq  272(%rsp),%r13    ; reload block from stack
+movzbl (%rax,%r13,1),%eax
+movq  256(%rsp),%rax    ; reload mtfv from stack
+movw  ...(%rax,%r13,2)
+```
+
+By contrast, GCC keeps `ptr` in `%r14` and `block` in `%r15` throughout the
+entire loop — no reloads.
+
+Root cause: The inner rotation loop needs `rbx` for the `ryy_j` pointer, and
+with 13+ live values simultaneously, FPC exhausts the 15 usable GPRs and
+falls back to spilling the less-frequently-used pointer variables.
+
+## Fix: asm implementation of the hot loop inner body
+
+Written `generateMTFValues` hot loop body in x86-64 assembly to ensure
+ptr/block/mtfv stay in dedicated registers (r13/r14/r15) throughout.
+
+## Phase 11.7 results (2026-04-21)
+
+Hand-written x86-64 assembly for `generateMTFValues` in `pasbzip2generatemtf.s`.
+Guarded by `{$IFDEF AVX2}` in `pasbzip2compress.pas`; Pascal fallback used otherwise.
+Build script updated to assemble the `.s` file and preserve it from cleanup.
+
+Key bug found and fixed during development: MTF rotation loop wrote to `-1(%rax)`
+instead of `(%rax)`, causing the yy[1]=yy[0] shift (done before the loop) to be
+overwritten on the first loop iteration.
+
+| Direction  | Corpus  | bs | Phase 11.6 Pascal | Phase 11.7 Pascal | Ratio |
+|------------|---------|----|-----------------:|------------------:|------:|
+| compress   | text    | 1  |             7.2  |              5.7  | -21%  |
+| compress   | binary  | 1  |            11.3  |              9.1  | -20%  |
+| compress   | binary  | 5  |            11.8  |              9.2  | +1.01x vs C |
+| compress   | text    | 9  |             5.8  |              5.3  | 0.85x vs C |
+| compress   | binary  | 9  |            11.0  |              9.2  | 0.89x vs C |
+
+Average Pascal/C ratio: **1.39× slower** (was 1.49×, improvement: ~7%).
+Binary compression shows largest gains (binary/bs5 now ties C at 1.01×).
+Text compression shows less improvement (text has more runs → zPend path dominates).
+
+Note: absolute throughput numbers vary with CPU load; ratios are the meaningful metric.

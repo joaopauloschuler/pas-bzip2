@@ -138,91 +138,37 @@ begin
 end;
 
 // ---------------------------------------------------------------------------
-// generateMTFValues  (compress.c lines ~119-231)
+// generateMTFNonMatch  — helper for generateMTFValues non-match branch
+//
+// Called when yy[0] != ll_i. Handles: flush of pending run-length codes
+// (zPend), MTF array rotation, and emission of the MTF position symbol.
+//
+// Extracted into a separate (non-inline) procedure to reduce register
+// pressure in the outer generateMTFValues loop.  With this code extracted,
+// FPC's register allocator can assign ptr/block/mtfv to dedicated callee-
+// saved registers (r12/r13/r14) in the outer loop instead of spilling them
+// to the stack on every iteration.
+//
+// Parameters are chosen to fit in the 6 SysV integer argument registers
+// (rdi, rsi, rdx, rcx, r8, r9) — same technique as mainGtU (Phase 11.6).
 // ---------------------------------------------------------------------------
-procedure generateMTFValues(s: PEState);
+procedure generateMTFNonMatch(yy: PUChar; ll_i: UChar;
+                              mtfv: PUInt16; mtfFreq: PInt32;
+                              var wr: Int32; var zPend: Int32);
 var
-  yy          : array[0..255] of UChar;
-  i, j        : Int32;
-  zPend       : Int32;
-  wr          : Int32;
-  EOB         : Int32;
-  ptr         : PUInt32;
-  block       : PUChar;
-  mtfv        : PUInt16;
-  ll_i        : UChar;
   rtmp, rtmp2 : UChar;
   ryy_j       : PUChar;
-  rll_i       : UChar;
+  j           : Int32;
 begin
-  FillChar(yy, SizeOf(yy), 0);
-  ptr   := s^.ptr;
-  block := s^.block;
-  mtfv  := s^.mtfv;
-
-  makeMaps_e(s);
-  EOB := s^.nInUse + 1;
-
-  for i := 0 to EOB do s^.mtfFreq[i] := 0;
-
-  wr    := 0;
-  zPend := 0;
-  for i := 0 to s^.nInUse - 1 do yy[i] := UChar(i);
-
-  for i := 0 to s^.nblock - 1 do begin
-    AssertD(Bool(Ord(wr <= i)), 'generateMTFValues(1)');
-    j := Int32(ptr[i]) - 1;
-    if j < 0 then j += s^.nblock;
-    ll_i := s^.unseqToSeq[block[j]];
-    AssertD(Bool(Ord(ll_i < s^.nInUse)), 'generateMTFValues(2a)');
-
-    if yy[0] = ll_i then begin
-      Inc(zPend);
-    end else begin
-
-      if zPend > 0 then begin
-        Dec(zPend);
-        while True do begin
-          if (zPend and 1) <> 0 then begin
-            mtfv[wr] := BZ_RUNB; Inc(wr);
-            Inc(s^.mtfFreq[BZ_RUNB]);
-          end else begin
-            mtfv[wr] := BZ_RUNA; Inc(wr);
-            Inc(s^.mtfFreq[BZ_RUNA]);
-          end;
-          if zPend < 2 then Break;
-          zPend := (zPend - 2) div 2;
-        end;
-        zPend := 0;
-      end;
-
-      rtmp  := yy[1];
-      yy[1] := yy[0];
-      ryy_j := @yy[1];
-      rll_i := ll_i;
-      while rll_i <> rtmp do begin
-        Inc(ryy_j);
-        rtmp2  := rtmp;
-        rtmp   := ryy_j^;
-        ryy_j^ := rtmp2;
-      end;
-      yy[0] := rtmp;
-      j := ryy_j - @yy[0];
-      mtfv[wr] := UInt16(j + 1); Inc(wr);
-      Inc(s^.mtfFreq[j + 1]);
-
-    end;
-  end;
-
   if zPend > 0 then begin
     Dec(zPend);
     while True do begin
       if (zPend and 1) <> 0 then begin
         mtfv[wr] := BZ_RUNB; Inc(wr);
-        Inc(s^.mtfFreq[BZ_RUNB]);
+        Inc(mtfFreq[BZ_RUNB]);
       end else begin
         mtfv[wr] := BZ_RUNA; Inc(wr);
-        Inc(s^.mtfFreq[BZ_RUNA]);
+        Inc(mtfFreq[BZ_RUNA]);
       end;
       if zPend < 2 then Break;
       zPend := (zPend - 2) div 2;
@@ -230,11 +176,110 @@ begin
     zPend := 0;
   end;
 
+  rtmp  := yy[1];
+  yy[1] := yy[0];
+  ryy_j := yy + 1;
+  while ll_i <> rtmp do begin
+    Inc(ryy_j);
+    rtmp2  := rtmp;
+    rtmp   := ryy_j^;
+    ryy_j^ := rtmp2;
+  end;
+  yy[0] := rtmp;
+  j := ryy_j - yy;
+  mtfv[wr] := UInt16(j + 1); Inc(wr);
+  Inc(mtfFreq[j + 1]);
+end;
+
+// ---------------------------------------------------------------------------
+// generateMTFValues  (compress.c lines ~119-231)
+//
+// Phase 11.7 optimisation: when compiled with -dAVX2, the implementation is
+// provided by hand-written x86-64 assembly in pasbzip2generatemtf.s.
+// That version keeps ptr/block/mtfv/unseqToSeq in dedicated callee-saved
+// registers (rbx, r12, r13, r14, r15) throughout the hot loop, eliminating
+// 4+ stack spill/reload per iteration caused by FPC's register allocator.
+// Without AVX2 (generic build), the Pascal version below is used instead.
+// ---------------------------------------------------------------------------
+{$IFDEF AVX2}
+
+// Link the pre-assembled object; the symbol matches FPC's name mangling.
+{$L pasbzip2generatemtf.o}
+procedure generateMTFValues(s: PEState);
+  external name 'PASBZIP2COMPRESS_$$_GENERATEMTFVALUES$PESTATE';
+
+{$ELSE}
+
+// Pascal fallback for non-AVX2 builds.
+// Uses the same generateMTFNonMatch helper to keep the outer loop compact.
+procedure generateMTFValues(s: PEState);
+var
+  yy         : array[0..255] of UChar;
+  i          : Int32;
+  zPend      : Int32;
+  wr         : Int32;
+  EOB        : Int32;
+  nblock     : Int32;
+  ptr        : PUInt32;
+  block      : PUChar;
+  mtfv       : PUInt16;
+  mtfFreq    : PInt32;
+  unseqToSeq : PUChar;
+  ll_i       : UChar;
+  j          : Int32;
+begin
+  FillChar(yy, SizeOf(yy), 0);
+  ptr        := s^.ptr;
+  block      := s^.block;
+  mtfv       := s^.mtfv;
+  unseqToSeq := @s^.unseqToSeq[0];
+  mtfFreq    := @s^.mtfFreq[0];
+  nblock     := s^.nblock;
+
+  makeMaps_e(s);
+  EOB := s^.nInUse + 1;
+
+  for i := 0 to EOB do mtfFreq[i] := 0;
+
+  wr    := 0;
+  zPend := 0;
+  for i := 0 to s^.nInUse - 1 do yy[i] := UChar(i);
+
+  for i := 0 to nblock - 1 do begin
+    AssertD(Bool(Ord(wr <= i)), 'generateMTFValues(1)');
+    j := Int32(ptr[i]) - 1;
+    if j < 0 then j += nblock;
+    ll_i := unseqToSeq[block[j]];
+    AssertD(Bool(Ord(ll_i < s^.nInUse)), 'generateMTFValues(2a)');
+
+    if yy[0] = ll_i then
+      Inc(zPend)
+    else
+      generateMTFNonMatch(@yy[0], ll_i, mtfv, mtfFreq, wr, zPend);
+  end;
+
+  if zPend > 0 then begin
+    Dec(zPend);
+    while True do begin
+      if (zPend and 1) <> 0 then begin
+        mtfv[wr] := BZ_RUNB; Inc(wr);
+        Inc(mtfFreq[BZ_RUNB]);
+      end else begin
+        mtfv[wr] := BZ_RUNA; Inc(wr);
+        Inc(mtfFreq[BZ_RUNA]);
+      end;
+      if zPend < 2 then Break;
+      zPend := (zPend - 2) div 2;
+    end;
+  end;
+
   mtfv[wr] := UInt16(EOB); Inc(wr);
-  Inc(s^.mtfFreq[EOB]);
+  Inc(mtfFreq[EOB]);
 
   s^.nMTF := wr;
 end;
+
+{$ENDIF AVX2}
 
 // ---------------------------------------------------------------------------
 // emitMTFGroupFast  — helper for the sendMTFValues hot path

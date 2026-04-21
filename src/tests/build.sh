@@ -45,6 +45,14 @@ fi
 
 FPC_FLAGS="-O3 -dAVX2 -CfAVX2 -CpCOREI -OpCOREI -Fu$SRC_DIR -Fi$SRC_DIR -FE$BIN_DIR -Fl$SRC_DIR $@"
 
+# ---- Step 1b: Assemble hand-written AVX2/asm objects if -dAVX2 is in flags ----
+if echo "$FPC_FLAGS" | grep -q '\-dAVX2'; then
+  echo
+  echo "Assembling hand-written asm objects for AVX2 build..."
+  as -o "$SRC_DIR/pasbzip2generatemtf.o" "$SRC_DIR/pasbzip2generatemtf.s"
+  echo "  pasbzip2generatemtf.o assembled OK"
+fi
+
 compile_test() {
   local name="$1"
   local src="$SCRIPT_DIR/$name.pas"
@@ -71,8 +79,12 @@ echo "Compiling bzip2.pas ..."
 fpc $FPC_FLAGS $SRC_DIR/bzip2.pas
 echo "bzip2 compiled -> $BIN_DIR/bzip2"
 
-# ---- Clean compiled Pascal artifacts ----
-find "$SRC_DIR"    -maxdepth 2 \( -name '*.ppu' -o -name '*.o' -o -name '*.compiled' -o -name '*.s' \) -delete
+# ---- Clean compiled Pascal artifacts (preserve hand-written asm files) ----
+# pasbzip2generatemtf.s is a hand-written source; pasbzip2generatemtf.o is its
+# compiled output needed for linking — both are excluded from deletion.
+find "$SRC_DIR"    -maxdepth 2 \( -name '*.ppu' -o -name '*.compiled' \) -delete
+find "$SRC_DIR"    -maxdepth 2 \( -name '*.o' -o -name '*.s' \) \
+     ! -name 'libbz2.so' ! -name 'pasbzip2generatemtf.s' ! -name 'pasbzip2generatemtf.o' -delete
 find "$BIN_DIR"    -maxdepth 1 \( -name '*.ppu' -o -name '*.o' -o -name '*.compiled' -o -name '*.s' \) -delete
 find "$SCRIPT_DIR" -maxdepth 1 \( -name '*.ppu' -o -name '*.o' -o -name '*.compiled' -o -name '*.s' \) -delete
 
