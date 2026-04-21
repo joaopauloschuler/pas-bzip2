@@ -180,20 +180,43 @@ end;
 // ---------------------------------------------------------------------------
 // BZ2_hbCreateDecodeTables
 // ---------------------------------------------------------------------------
+// Optimisation (Phase 11.14): replace the O(alphaSize × range) double loop
+// that built perm[] with a counting-sort in O(alphaSize + range).
+// The original C code iterates over all alphaSize symbols for each bit-length
+// value (minLen..maxLen), producing ~3870 iterations for alphaSize=258,
+// range=15.  The new code makes a single pass over the length[] array to
+// compute starting positions per length, then a second pass to fill perm[].
+// All other parts of the function are unchanged.
 procedure BZ2_hbCreateDecodeTables(limit, base, perm: PInt32;
     length: PUChar; minLen, maxLen, alphaSize: Int32);
 var
   pp, i, j, vec: Int32;
+  { counting-sort temporaries: start[k] = first perm index for bit-length k }
+  start: array[0..BZ_MAX_CODE_LEN] of Int32;
 begin
+  { ---- Build perm[] via counting sort: O(alphaSize + range) ---- }
+  { zero the count array for lengths minLen..maxLen }
+  for i := minLen to maxLen do start[i] := 0;
+  { count symbols at each length }
+  for j := 0 to alphaSize - 1 do
+    Inc(start[length[j]]);
+  { convert counts to start positions (prefix sum) }
   pp := 0;
   for i := minLen to maxLen do
-    for j := 0 to alphaSize - 1 do
-      if length[j] = UChar(i) then
-      begin
-        perm[pp] := j;
-        Inc(pp);
-      end;
+  begin
+    j := start[i];       { count for length i }
+    start[i] := pp;      { first insertion index }
+    Inc(pp, j);
+  end;
+  { scatter symbols into perm[] in length order }
+  for j := 0 to alphaSize - 1 do
+  begin
+    i := length[j];
+    perm[start[i]] := j;
+    Inc(start[i]);
+  end;
 
+  { ---- Build base[] ---- }
   for i := 0 to BZ_MAX_CODE_LEN - 1 do base[i] := 0;
   for i := 0 to alphaSize - 1 do
     base[length[i] + 1] += 1;
@@ -201,6 +224,7 @@ begin
   for i := 1 to BZ_MAX_CODE_LEN - 1 do
     base[i] += base[i - 1];
 
+  { ---- Build limit[] ---- }
   for i := 0 to BZ_MAX_CODE_LEN - 1 do limit[i] := 0;
   vec := 0;
 

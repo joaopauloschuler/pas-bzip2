@@ -98,24 +98,74 @@ begin
   end;
 end;
 
+// Phase 11.14: extract the 3-way partition inner loop into a separate
+// non-inline procedure.  In the combined fallbackQSort3, FPC commits all 5
+// callee-saved GPRs to unLo/unHi/n/med/t and spills fmap_/eclass_/ltLo/gtHi
+// to the stack, costing 2-4 loads per hot-path iteration.  In the extracted
+// helper, the 4 in/out values are packed in a single TFBPartResult record so
+// only ONE output pointer is needed.  This frees enough registers for FPC to
+// keep fmap and eclass alive throughout the hot partition loops.
+type
+  TFBPartResult = record
+    unLo, ltLo, unHi, gtHi: Int32;
+  end;
+  PFBPartResult = ^TFBPartResult;
+
+procedure fallbackPartition(fmap: PUInt32; eclass: PUInt32;
+                             med: UInt32; res: PFBPartResult);
+var
+  unLo, unHi, ltLo, gtHi, n: Int32;
+  t: UInt32;
+begin
+  unLo := res^.unLo;
+  ltLo := res^.ltLo;
+  unHi := res^.unHi;
+  gtHi := res^.gtHi;
+  while True do begin
+    while True do begin
+      if unLo > unHi then break;
+      n := Int32(eclass[fmap[unLo]]) - Int32(med);
+      if n = 0 then begin
+        t := fmap[unLo]; fmap[unLo] := fmap[ltLo]; fmap[ltLo] := t;
+        Inc(ltLo); Inc(unLo);
+        continue;
+      end;
+      if n > 0 then break;
+      Inc(unLo);
+    end;
+    while True do begin
+      if unLo > unHi then break;
+      n := Int32(eclass[fmap[unHi]]) - Int32(med);
+      if n = 0 then begin
+        t := fmap[unHi]; fmap[unHi] := fmap[gtHi]; fmap[gtHi] := t;
+        Dec(gtHi); Dec(unHi);
+        continue;
+      end;
+      if n < 0 then break;
+      Dec(unHi);
+    end;
+    if unLo > unHi then break;
+    t := fmap[unLo]; fmap[unLo] := fmap[unHi]; fmap[unHi] := t;
+    Inc(unLo); Dec(unHi);
+  end;
+  res^.unLo := unLo;
+  res^.ltLo := ltLo;
+  res^.unHi := unHi;
+  res^.gtHi := gtHi;
+end;
+
 procedure fallbackQSort3(fmap: PUInt32; eclass: PUInt32; loSt, hiSt: Int32);
 var
-  unLo, unHi, ltLo, gtHi, n, m: Int32;
+  pres: TFBPartResult;
+  n, m: Int32;
   sp, lo, hi: Int32;
   zzp1, zzp2, zzn: Int32;
   med, r, r3: UInt32;
   t: UInt32;
   stackLo: array[0..FALLBACK_QSORT_STACK_SIZE-1] of Int32;
   stackHi: array[0..FALLBACK_QSORT_STACK_SIZE-1] of Int32;
-  // Local copies of fmap/eclass pointers — remove closure-capture spilling.
-  // Nested procedures fswap/fvswap are eliminated; fswap is inlined directly,
-  // fvswap is inlined as a while loop. This lets FPC keep fmap_/eclass_ in regs.
-  fmap_: PUInt32;
-  eclass_: PUInt32;
 
 begin
-  fmap_   := fmap;
-  eclass_ := eclass;
   r  := 0;
   sp := 0;
   stackLo[sp] := loSt; stackHi[sp] := hiSt; Inc(sp);
@@ -127,71 +177,43 @@ begin
     lo := stackLo[sp]; hi := stackHi[sp];
 
     if hi - lo < FALLBACK_QSORT_SMALL_THRESH then begin
-      fallbackSimpleSort(fmap_, eclass_, lo, hi);
+      fallbackSimpleSort(fmap, eclass, lo, hi);
       continue;
     end;
 
     r  := ((r * 7621) + 1) mod 32768;
     r3 := r mod 3;
-    if r3 = 0 then      med := eclass_[fmap_[lo]]
-    else if r3 = 1 then med := eclass_[fmap_[(lo+hi) shr 1]]
-    else                med := eclass_[fmap_[hi]];
+    if r3 = 0 then      med := eclass[fmap[lo]]
+    else if r3 = 1 then med := eclass[fmap[(lo+hi) shr 1]]
+    else                med := eclass[fmap[hi]];
 
-    unLo := lo; ltLo := lo;
-    unHi := hi; gtHi := hi;
+    pres.unLo := lo; pres.ltLo := lo;
+    pres.unHi := hi; pres.gtHi := hi;
 
-    while True do begin
-      while True do begin
-        if unLo > unHi then break;
-        n := Int32(eclass_[fmap_[unLo]]) - Int32(med);
-        if n = 0 then begin
-          // fswap(fmap_[unLo], fmap_[ltLo]) inlined
-          t := fmap_[unLo]; fmap_[unLo] := fmap_[ltLo]; fmap_[ltLo] := t;
-          Inc(ltLo); Inc(unLo);
-          continue;
-        end;
-        if n > 0 then break;
-        Inc(unLo);
-      end;
-      while True do begin
-        if unLo > unHi then break;
-        n := Int32(eclass_[fmap_[unHi]]) - Int32(med);
-        if n = 0 then begin
-          // fswap(fmap_[unHi], fmap_[gtHi]) inlined
-          t := fmap_[unHi]; fmap_[unHi] := fmap_[gtHi]; fmap_[gtHi] := t;
-          Dec(gtHi); Dec(unHi);
-          continue;
-        end;
-        if n < 0 then break;
-        Dec(unHi);
-      end;
-      if unLo > unHi then break;
-      // fswap(fmap_[unLo], fmap_[unHi]) inlined
-      t := fmap_[unLo]; fmap_[unLo] := fmap_[unHi]; fmap_[unHi] := t;
-      Inc(unLo); Dec(unHi);
-    end;
+    // Extract hot partition loop so fmap/eclass stay in registers.
+    fallbackPartition(fmap, eclass, med, @pres);
 
-    AssertD(Bool(Ord(unHi = unLo - 1)), 'fallbackQSort3(2)');
+    AssertD(Bool(Ord(pres.unHi = pres.unLo - 1)), 'fallbackQSort3(2)');
 
-    if gtHi < ltLo then continue;
+    if pres.gtHi < pres.ltLo then continue;
 
     // fvswap(lo, unLo-n, n) where n = fmin(ltLo-lo, unLo-ltLo) — inlined
-    n := ltLo - lo; if unLo - ltLo < n then n := unLo - ltLo;
-    zzp1 := lo; zzp2 := unLo - n; zzn := n;
+    n := pres.ltLo - lo; if pres.unLo - pres.ltLo < n then n := pres.unLo - pres.ltLo;
+    zzp1 := lo; zzp2 := pres.unLo - n; zzn := n;
     while zzn > 0 do begin
-      t := fmap_[zzp1]; fmap_[zzp1] := fmap_[zzp2]; fmap_[zzp2] := t;
+      t := fmap[zzp1]; fmap[zzp1] := fmap[zzp2]; fmap[zzp2] := t;
       Inc(zzp1); Inc(zzp2); Dec(zzn);
     end;
 
-    m := hi - gtHi; if gtHi - unHi < m then m := gtHi - unHi;
-    zzp1 := unLo; zzp2 := hi - m + 1; zzn := m;
+    m := hi - pres.gtHi; if pres.gtHi - pres.unHi < m then m := pres.gtHi - pres.unHi;
+    zzp1 := pres.unLo; zzp2 := hi - m + 1; zzn := m;
     while zzn > 0 do begin
-      t := fmap_[zzp1]; fmap_[zzp1] := fmap_[zzp2]; fmap_[zzp2] := t;
+      t := fmap[zzp1]; fmap[zzp1] := fmap[zzp2]; fmap[zzp2] := t;
       Inc(zzp1); Inc(zzp2); Dec(zzn);
     end;
 
-    n := lo + unLo - ltLo - 1;
-    m := hi - (gtHi - unHi) + 1;
+    n := lo + pres.unLo - pres.ltLo - 1;
+    m := hi - (pres.gtHi - pres.unHi) + 1;
 
     if n - lo > hi - m then begin
       stackLo[sp] := lo; stackHi[sp] := n; Inc(sp);
