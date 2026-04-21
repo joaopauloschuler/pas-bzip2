@@ -102,26 +102,20 @@ procedure fallbackQSort3(fmap: PUInt32; eclass: PUInt32; loSt, hiSt: Int32);
 var
   unLo, unHi, ltLo, gtHi, n, m: Int32;
   sp, lo, hi: Int32;
+  zzp1, zzp2, zzn: Int32;
   med, r, r3: UInt32;
+  t: UInt32;
   stackLo: array[0..FALLBACK_QSORT_STACK_SIZE-1] of Int32;
   stackHi: array[0..FALLBACK_QSORT_STACK_SIZE-1] of Int32;
-
-  procedure fswap(var a, b: UInt32); inline;
-  var t: UInt32;
-  begin t := a; a := b; b := t; end;
-
-  procedure fvswap(zzp1, zzp2, zzn: Int32); inline;
-  begin
-    while zzn > 0 do begin
-      fswap(fmap[zzp1], fmap[zzp2]);
-      Inc(zzp1); Inc(zzp2); Dec(zzn);
-    end;
-  end;
-
-  function fmin(a, b: Int32): Int32; inline;
-  begin if a < b then fmin := a else fmin := b; end;
+  // Local copies of fmap/eclass pointers — remove closure-capture spilling.
+  // Nested procedures fswap/fvswap are eliminated; fswap is inlined directly,
+  // fvswap is inlined as a while loop. This lets FPC keep fmap_/eclass_ in regs.
+  fmap_: PUInt32;
+  eclass_: PUInt32;
 
 begin
+  fmap_   := fmap;
+  eclass_ := eclass;
   r  := 0;
   sp := 0;
   stackLo[sp] := loSt; stackHi[sp] := hiSt; Inc(sp);
@@ -133,15 +127,15 @@ begin
     lo := stackLo[sp]; hi := stackHi[sp];
 
     if hi - lo < FALLBACK_QSORT_SMALL_THRESH then begin
-      fallbackSimpleSort(fmap, eclass, lo, hi);
+      fallbackSimpleSort(fmap_, eclass_, lo, hi);
       continue;
     end;
 
     r  := ((r * 7621) + 1) mod 32768;
     r3 := r mod 3;
-    if r3 = 0 then      med := eclass[fmap[lo]]
-    else if r3 = 1 then med := eclass[fmap[(lo+hi) shr 1]]
-    else                med := eclass[fmap[hi]];
+    if r3 = 0 then      med := eclass_[fmap_[lo]]
+    else if r3 = 1 then med := eclass_[fmap_[(lo+hi) shr 1]]
+    else                med := eclass_[fmap_[hi]];
 
     unLo := lo; ltLo := lo;
     unHi := hi; gtHi := hi;
@@ -149,9 +143,10 @@ begin
     while True do begin
       while True do begin
         if unLo > unHi then break;
-        n := Int32(eclass[fmap[unLo]]) - Int32(med);
+        n := Int32(eclass_[fmap_[unLo]]) - Int32(med);
         if n = 0 then begin
-          fswap(fmap[unLo], fmap[ltLo]);
+          // fswap(fmap_[unLo], fmap_[ltLo]) inlined
+          t := fmap_[unLo]; fmap_[unLo] := fmap_[ltLo]; fmap_[ltLo] := t;
           Inc(ltLo); Inc(unLo);
           continue;
         end;
@@ -160,9 +155,10 @@ begin
       end;
       while True do begin
         if unLo > unHi then break;
-        n := Int32(eclass[fmap[unHi]]) - Int32(med);
+        n := Int32(eclass_[fmap_[unHi]]) - Int32(med);
         if n = 0 then begin
-          fswap(fmap[unHi], fmap[gtHi]);
+          // fswap(fmap_[unHi], fmap_[gtHi]) inlined
+          t := fmap_[unHi]; fmap_[unHi] := fmap_[gtHi]; fmap_[gtHi] := t;
           Dec(gtHi); Dec(unHi);
           continue;
         end;
@@ -170,15 +166,29 @@ begin
         Dec(unHi);
       end;
       if unLo > unHi then break;
-      fswap(fmap[unLo], fmap[unHi]); Inc(unLo); Dec(unHi);
+      // fswap(fmap_[unLo], fmap_[unHi]) inlined
+      t := fmap_[unLo]; fmap_[unLo] := fmap_[unHi]; fmap_[unHi] := t;
+      Inc(unLo); Dec(unHi);
     end;
 
     AssertD(Bool(Ord(unHi = unLo - 1)), 'fallbackQSort3(2)');
 
     if gtHi < ltLo then continue;
 
-    n := fmin(ltLo - lo, unLo - ltLo); fvswap(lo, unLo - n, n);
-    m := fmin(hi - gtHi, gtHi - unHi); fvswap(unLo, hi - m + 1, m);
+    // fvswap(lo, unLo-n, n) where n = fmin(ltLo-lo, unLo-ltLo) — inlined
+    n := ltLo - lo; if unLo - ltLo < n then n := unLo - ltLo;
+    zzp1 := lo; zzp2 := unLo - n; zzn := n;
+    while zzn > 0 do begin
+      t := fmap_[zzp1]; fmap_[zzp1] := fmap_[zzp2]; fmap_[zzp2] := t;
+      Inc(zzp1); Inc(zzp2); Dec(zzn);
+    end;
+
+    m := hi - gtHi; if gtHi - unHi < m then m := gtHi - unHi;
+    zzp1 := unLo; zzp2 := hi - m + 1; zzn := m;
+    while zzn > 0 do begin
+      t := fmap_[zzp1]; fmap_[zzp1] := fmap_[zzp2]; fmap_[zzp2] := t;
+      Inc(zzp1); Inc(zzp2); Dec(zzn);
+    end;
 
     n := lo + unLo - ltLo - 1;
     m := hi - (gtHi - unHi) + 1;

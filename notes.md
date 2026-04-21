@@ -233,3 +233,24 @@ instructions generated for them in `fallbackSort`'s body).
 The `cc` and `cc1` variables are now local to the extracted helpers, freeing two
 slots in the outer `fallbackSort` register frame. With `cc` gone, `H` moves from
 r15d to r14d, leaving `r15` fully available for future use.
+
+## Phase 11.12: eliminate fswap/fvswap closures in fallbackQSort3 (2026-04-21)
+
+`fallbackQSort3` (5.26% hotspot) had nested procedures `fswap` and `fvswap` that
+captured `fmap` as a closure variable, similar to the `fallbackSort` pattern.
+
+Fix: remove nested procedures; inline `fswap` as direct temp-variable swap, and
+inline `fvswap` as a `while zzn > 0 do` loop. Add `fmap_`/`eclass_` local copies.
+Also add `t` as an explicit temp so FPC allocates it to a callee-saved register
+(r14d) rather than a volatile register that would be clobbered.
+
+Register allocation after change:
+- `unLo` = r12d, `unHi` = r13d, `n` = ebx, `t` = r14d, `med` = r15d
+- `ltLo` still spilled to stack (888(%rsp)) — all 5 callee-saved registers committed
+- `fmap_` at 800(%rsp), `eclass_` at 816(%rsp) — same as before with closures
+
+The improvement is modest: `t` is now register-allocated (r14d) instead of using
+volatile registers that require save/restore around calls. The fundamental bottleneck
+(too many live variables for available registers) remains. `ltLo` would need to be
+in a register to significantly help the swap operations, which requires either
+hand-written assembly or restructuring to reduce live variable count.
