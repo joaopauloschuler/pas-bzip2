@@ -285,13 +285,58 @@ begin
   fbScanToNextSet := k;
 end;
 
+{ Phase 11.18: extract the exponential radix-sort refinement loop from
+  fallbackSort into a separate procedure so that FPC can allocate dedicated
+  registers for fmap/eclass/bhtab.
+
+  In fallbackSort the large stack arrays (ftab[257], ftabCopy[256]) force FPC
+  to use rbp as frame pointer. All 5 callee-saved registers are then committed:
+  r12=l, rbx=r, r13=nNotDone, r14=H, r15=i (for init/recon loops). This
+  leaves no register for bhtab, fmap, or eclass — all three are spilled to
+  the stack and reloaded on every inner bhtab scan iteration.
+
+  In this extracted helper with only 4 parameters (fmap, eclass, bhtab, nblock):
+  - rdi=fmap, rsi=eclass, rdx=bhtab — all stay in registers throughout!
+  - The 5 callee-saved registers are available for H, nNotDone, r, l, k.
+
+  NOT inline: must be a real function call to get its own register frame. }
+procedure fallbackSortLoop(fmap: PUInt32; eclass: PUInt32;
+                            bhtab: PUInt32; nblock: Int32);
+var
+  H, k, l, r, nNotDone: Int32;
+begin
+  H := 1;
+  while True do begin
+    fbAssignBucketIDs(fmap, eclass, bhtab, nblock, H);
+
+    nNotDone := 0;
+    r := -1;
+    while True do begin
+      k := fbScanToNextClear(bhtab, r + 1);
+      l := k - 1;
+      if l >= nblock then break;
+      k := fbScanToNextSet(bhtab, k);
+      r := k - 1;
+      if r >= nblock then break;
+
+      if r > l then begin
+        Inc(nNotDone, r - l + 1);
+        fallbackQSort3(fmap, eclass, l, r);
+        fbMarkBucketHeaders(fmap, eclass, bhtab, l, r);
+      end;
+    end;
+
+    H := H * 2;
+    if (H > nblock) or (nNotDone = 0) then break;
+  end;
+end;
+
 procedure fallbackSort(fmap: PUInt32; eclass: PUInt32; bhtab: PUInt32;
                        nblock: Int32; {%H-}verb: Int32);
 var
   ftab:     array[0..256] of Int32;
   ftabCopy: array[0..255] of Int32;
-  H, i, j, k, l, r: Int32;
-  nNotDone: Int32;
+  i, j, k: Int32;
   nBhtab: Int32;
   eclass8: PUChar;
   // Local copy of bhtab pointer; no longer used for closure capture.
@@ -329,39 +374,9 @@ begin
     bhtab_[j shr 5] := bhtab_[j shr 5] and not (UInt32(1) shl (j and 31));
   end;
 
-  // Exponential radix sort — log(N) refinement loop
-  H := 1;
-  while True do begin
-    // Assign bucket IDs: for each i, write j (the last BH-set index ≤ i) into
-    // eclass[fmap[i]-H mod nblock]. Extracted so FPC keeps i in a register.
-    fbAssignBucketIDs(fmap, eclass, bhtab_, nblock, H);
-
-    nNotDone := 0;
-    r := -1;
-    while True do begin
-      // Find the next non-singleton bucket
-      // fbScanToNextClear: advance past set bits to find the bucket start
-      k := fbScanToNextClear(bhtab_, r + 1);
-      l := k - 1;
-      if l >= nblock then break;
-      // fbScanToNextSet: advance past clear bits to find the bucket end
-      k := fbScanToNextSet(bhtab_, k);
-      r := k - 1;
-      if r >= nblock then break;
-
-      // [l, r] brackets the current bucket
-      if r > l then begin
-        Inc(nNotDone, r - l + 1);
-        fallbackQSort3(fmap, eclass, l, r);
-        // Scan bucket and set BH header bits where sort key changes.
-        // Extracted so FPC keeps i in a register.
-        fbMarkBucketHeaders(fmap, eclass, bhtab_, l, r);
-      end;
-    end;
-
-    H := H * 2;
-    if (H > nblock) or (nNotDone = 0) then break;
-  end;
+  // Phase 11.18: hot refinement loop extracted to fallbackSortLoop so FPC
+  // can keep fmap/eclass/bhtab in rdi/rsi/rdx throughout.
+  fallbackSortLoop(fmap, eclass, bhtab_, nblock);
 
   // Reconstruct original block in eclass8[0..nblock-1]
   j := 0;
