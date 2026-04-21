@@ -319,3 +319,64 @@ capture overhead is eliminated.
 Benchmark result: ~1.39-1.43x (noisy; system load 1.5-2.5 on 2-core machine).
 The improvement from mainSort changes is small as mainSort is only 5.26% of runtime,
 but the code quality improvement is significant (goto → structured loop).
+
+## Phase 11.14: fallbackPartition extraction + hbCreateDecodeTables counting-sort (2026-04-21)
+
+### fallbackQSort3: extract fallbackPartition to get fmap/eclass in registers
+
+The hot inner loop of `fallbackQSort3` was still spilling `fmap` and `eclass` to
+the stack (`-8(%rbp)` / `-16(%rbp)`) because the outer frame had too many live
+pointers (fmap, eclass, res pointers for unLo/ltLo/unHi/gtHi).
+
+Fix: define `TFBPartResult` record (fields: unLo, ltLo, unHi, gtHi) and extract
+the partition loop to `fallbackPartition(fmap, eclass, med, res: PFBPartResult)`.
+With only 4 parameters (fitting in rdi, rsi, rdx, rcx), FPC keeps fmap in rdi and
+eclass in rsi throughout the entire hot inner loop — no stack reloads.
+
+Assembly confirmation:
+- Before: `movq -8(%rbp),%rax` (fmap reload) on every loop iteration
+- After: `(%rdi,%rax,4)` addressing pattern — fmap never leaves rdi
+- `r8d` = unLo, `r11d` = ltLo, `ebx` = unHi, `r13d` = gtHi (all callee-saved)
+
+### BZ2_hbCreateDecodeTables: counting-sort for perm[] (O(N+range) vs O(N×range))
+
+The original C code built `perm[]` with a double loop: for each bit-length value
+(minLen..maxLen), iterate over all alphaSize symbols. For alphaSize=258, range=15,
+this is ~3870 iterations, and the function appeared as a notable hotspot in gprof.
+
+Fix: replace with a counting-sort in two passes over alphaSize symbols:
+1. Count symbols at each length (one pass, O(N))
+2. Convert counts to start positions (prefix sum, O(range))
+3. Scatter symbols into perm[] (one pass, O(N))
+
+Total: O(N + range) vs O(N × range). Function dropped from ~40% of profiled
+runtime (sampling artifact) to negligible, eliminating it as a hotspot.
+
+Also changed `start[]` initialization from partial loop (`for i := minLen to maxLen`)
+to `FillDWord(start, BZ_MAX_CODE_LEN + 1, 0)` to silence FPC uninitialized warning.
+
+### BZ2_hbMakeCodeLengths: ADDWEIGHTS simplification (2026-04-21)
+
+Added `weight_: PInt32 := @weight[0]` to cache weight array base pointer.
+FPC cannot keep it in a callee-saved register (all 5 are committed to other vars),
+but the pointer caching reduces leaq computations slightly.
+
+Simplified ADDWEIGHTS: since depths fit in 8 bits (max ~20), their sum never
+carries into bit 8, so masking before addition is redundant:
+- Before: `((w[n1] and $FFFFFF00) + (w[n2] and $FFFFFF00)) or (1 + max(d1,d2))`
+- After: `((w[n1] + w[n2]) and $FFFFFF00) or (1 + max(d1,d2))`
+
+The two-branch `if d1 > d2 / else` form was also simplified to:
+```pascal
+if d2 > d1 then d1 := d2;  { d1 = max(d1, d2) }
+weight_[nNodes] := ((weight_[n1] + weight_[n2]) and Int32($FFFFFF00)) or (1 + d1);
+```
+
+Assembly effect: `d1` moved from stack-spilled variable to `r15d` (callee-saved).
+Saves one stack load per ADDWEIGHTS execution.
+
+### Phase 11.14 benchmark result
+
+~1.32x slower (stable run; system was loaded to ~1.6 avg during testing).
+Prior Phase 11.12 baseline was also ~1.28-1.35x, so improvement from 11.13+11.14
+is within measurement noise on this loaded 2-core machine.
