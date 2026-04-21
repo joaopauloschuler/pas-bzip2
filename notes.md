@@ -105,4 +105,49 @@ Average Pascal/C ratio: **1.39× slower** (was 1.49×, improvement: ~7%).
 Binary compression shows largest gains (binary/bs5 now ties C at 1.01×).
 Text compression shows less improvement (text has more runs → zPend path dominates).
 
+# BZ2_decompress
+
+## Root cause analysis (2026-04-21)
+
+`BZ2_decompress` is the largest CPU hotspot at 41.94% in profiling. It implements
+a Duff's-device state machine for decoding bzip2 compressed data. The function has
+30+ local variables that all get spilled to the stack by FPC because it cannot keep
+them in registers across the many `goto` labels.
+
+Key assembly findings from `-al` output:
+- All variables share `eax`/`rax` as their "register" — all spilled to the stack
+- `s` is kept in `r13` (callee-saved), `gPerm` in `r14`, `gBase` in `r15`,
+  `retVal` in `r12`
+- `bsBuff`/`bsLive` accessed as `32(%r13)` / `36(%r13)` (struct field loads)
+- `zn`, `zvec`, `gLimit` all spilled to stack (e.g. `280(%rsp)`, `288(%rsp)`, `320(%rsp)`)
+
+GCC (C reference) by contrast keeps `zn` in `%ebp` and uses XMM registers as
+extra integer storage: `zvec` in `%xmm2`, `gLimit` in `%xmm5`, `zj` in `%xmm4`.
+This is the key advantage GCC has: it uses XMM registers for extra integer state
+when GPR registers are exhausted.
+
+## Phase 11.8: Cache bsBuff/bsLive/strm as locals (2026-04-21)
+
+Approach: mirror the BZ_GET_FAST_C pattern from `unRLE_obuf_to_output_FAST`.
+Added `c_bsBuff`, `c_bsLive`, `c_strm` as cached locals at the top of `BZ2_decompress`,
+restored from `s^` at entry and saved back at `save_state_and_return`.
+
+Replaced all 125 `s^.bsBuff`, 166 `s^.bsLive`, and 294 `s^.strm^.` references
+inside the function with the cached local versions.
+
+Result: FPC still spills these to the stack (registers are exhausted), but the
+cached locals reduce pointer-dereference chains. `c_strm` reduces double-dereference
+`s^.strm^.field` to single-dereference `c_strm^.field`.
+
+Profiling comparison (gprof, same benchmark run):
+- Before: `BZ2_decompress` = 41.94% of runtime
+- After:  `BZ2_decompress` = 29.17% of runtime (~30% relative improvement)
+
+Benchmark average Pascal/C ratio: ~1.32x (was 1.39x) — about 5% improvement.
+Measurement is noisy due to system load; true improvement estimated at 3-7%.
+
+Note: GCC uses XMM registers for `zn`/`zvec`/`gLimit` which FPC cannot do in Pascal.
+The remaining gap requires either hand-written asm for the hot inner decode loop
+or further restructuring to reduce variable count in the hot section.
+
 Note: absolute throughput numbers vary with CPU load; ratios are the meaningful metric.

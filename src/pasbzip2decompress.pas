@@ -594,8 +594,21 @@ var
   sel_tmp   : UChar;
   { pointer-reversal temp }
   pr_tmp    : Int32;
+  { BZ_GET_FAST_C pattern: cache bsBuff/bsLive/strm to reduce pointer reloads.
+    bsBuff and bsLive are accessed in every GET_BITS call throughout this function.
+    FPC cannot keep c_bsBuff / c_bsLive in registers across goto labels, so
+    caching them as locals reduces the per-access cost from a struct-field memory
+    load via rbx (64-bit pointer + offset) to a simple stack-slot load.
+    c_strm caches the strm pointer to avoid the double indirection c_strm^.xxx. }
+  c_bsBuff  : UInt32;
+  c_bsLive  : Int32;
+  c_strm    : Pbz_stream;
 begin
   FillChar(pos, SizeOf(pos), 0);
+  { Restore cached bit-buffer locals from s^ }
+  c_bsBuff := s^.bsBuff;
+  c_bsLive := s^.bsLive;
+  c_strm   := s^.strm;
   { ---- Initialise save area on first call ---- }
   if s^.state = BZ_X_MAGIC_1 then
   begin
@@ -706,18 +719,18 @@ begin
   s^.state := BZ_X_MAGIC_1;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   if uc <> BZ_HDR_B then begin retVal := BZ_DATA_ERROR_MAGIC; goto save_state_and_return; end;
 
@@ -726,18 +739,18 @@ begin
   s^.state := BZ_X_MAGIC_2;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   if uc <> BZ_HDR_Z then begin retVal := BZ_DATA_ERROR_MAGIC; goto save_state_and_return; end;
 
@@ -746,18 +759,18 @@ begin
   s^.state := BZ_X_MAGIC_3;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   if uc <> BZ_HDR_h then begin retVal := BZ_DATA_ERROR_MAGIC; goto save_state_and_return; end;
 
@@ -766,18 +779,18 @@ begin
   s^.state := BZ_X_MAGIC_4;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      s^.blockSize100k := Int32((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      s^.blockSize100k := Int32((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   if (s^.blockSize100k < (BZ_HDR_0 + 1)) or (s^.blockSize100k > (BZ_HDR_0 + 9)) then
     begin retVal := BZ_DATA_ERROR_MAGIC; goto save_state_and_return; end;
@@ -785,16 +798,16 @@ begin
 
   if s^.smallDecompress <> 0 then
   begin
-    s^.ll16 := PUInt16(s^.strm^.bzalloc(s^.strm^.opaque,
+    s^.ll16 := PUInt16(c_strm^.bzalloc(c_strm^.opaque,
                  s^.blockSize100k * 100000 * SizeOf(UInt16), 1));
-    s^.ll4  := PUChar(s^.strm^.bzalloc(s^.strm^.opaque,
+    s^.ll4  := PUChar(c_strm^.bzalloc(c_strm^.opaque,
                  ((1 + s^.blockSize100k * 100000) shr 1) * SizeOf(UChar), 1));
     if (s^.ll16 = nil) or (s^.ll4 = nil) then
       begin retVal := BZ_MEM_ERROR; goto save_state_and_return; end;
   end
   else
   begin
-    s^.tt := PUInt32(s^.strm^.bzalloc(s^.strm^.opaque,
+    s^.tt := PUInt32(c_strm^.bzalloc(c_strm^.opaque,
                s^.blockSize100k * 100000 * SizeOf(UInt32), 1));
     if s^.tt = nil then
       begin retVal := BZ_MEM_ERROR; goto save_state_and_return; end;
@@ -807,18 +820,18 @@ begin
   s^.state := BZ_X_BLKHDR_1;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   if uc = $17 then goto L_endhdr_2;
   if uc <> $31 then begin retVal := BZ_DATA_ERROR; goto save_state_and_return; end;
@@ -828,18 +841,18 @@ begin
   s^.state := BZ_X_BLKHDR_2;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   if uc <> $41 then begin retVal := BZ_DATA_ERROR; goto save_state_and_return; end;
 
@@ -848,18 +861,18 @@ begin
   s^.state := BZ_X_BLKHDR_3;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   if uc <> $59 then begin retVal := BZ_DATA_ERROR; goto save_state_and_return; end;
 
@@ -868,18 +881,18 @@ begin
   s^.state := BZ_X_BLKHDR_4;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   if uc <> $26 then begin retVal := BZ_DATA_ERROR; goto save_state_and_return; end;
 
@@ -888,18 +901,18 @@ begin
   s^.state := BZ_X_BLKHDR_5;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   if uc <> $53 then begin retVal := BZ_DATA_ERROR; goto save_state_and_return; end;
 
@@ -908,18 +921,18 @@ begin
   s^.state := BZ_X_BLKHDR_6;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   if uc <> $59 then begin retVal := BZ_DATA_ERROR; goto save_state_and_return; end;
 
@@ -933,18 +946,18 @@ begin
   s^.state := BZ_X_BCRC_1;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   s^.storedBlockCRC := (s^.storedBlockCRC shl 8) or UInt32(uc);
 
@@ -953,18 +966,18 @@ begin
   s^.state := BZ_X_BCRC_2;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   s^.storedBlockCRC := (s^.storedBlockCRC shl 8) or UInt32(uc);
 
@@ -973,18 +986,18 @@ begin
   s^.state := BZ_X_BCRC_3;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   s^.storedBlockCRC := (s^.storedBlockCRC shl 8) or UInt32(uc);
 
@@ -993,18 +1006,18 @@ begin
   s^.state := BZ_X_BCRC_4;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   s^.storedBlockCRC := (s^.storedBlockCRC shl 8) or UInt32(uc);
 
@@ -1013,18 +1026,18 @@ begin
   s^.state := BZ_X_RANDBIT;
   while True do
   begin
-    if s^.bsLive >= 1 then
+    if c_bsLive >= 1 then
     begin
-      s^.blockRandomised := Bool((s^.bsBuff shr (s^.bsLive - 1)) and 1);
-      Dec(s^.bsLive, 1);
+      s^.blockRandomised := Bool((c_bsBuff shr (c_bsLive - 1)) and 1);
+      Dec(c_bsLive, 1);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
 
   { Assemble origPtr from 3 bytes }
@@ -1035,18 +1048,18 @@ begin
   s^.state := BZ_X_ORIGPTR_1;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   s^.origPtr := (s^.origPtr shl 8) or Int32(uc);
 
@@ -1055,18 +1068,18 @@ begin
   s^.state := BZ_X_ORIGPTR_2;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   s^.origPtr := (s^.origPtr shl 8) or Int32(uc);
 
@@ -1075,18 +1088,18 @@ begin
   s^.state := BZ_X_ORIGPTR_3;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   s^.origPtr := (s^.origPtr shl 8) or Int32(uc);
 
@@ -1104,18 +1117,18 @@ begin
     s^.state := BZ_X_MAPPING_1;
     while True do
     begin
-      if s^.bsLive >= 1 then
+      if c_bsLive >= 1 then
       begin
-        uc := UChar((s^.bsBuff shr (s^.bsLive - 1)) and 1);
-        Dec(s^.bsLive, 1);
+        uc := UChar((c_bsBuff shr (c_bsLive - 1)) and 1);
+        Dec(c_bsLive, 1);
         Break;
       end;
-      if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-      s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-      Inc(s^.bsLive, 8);
-      Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-      Inc(s^.strm^.total_in_lo32);
-      if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+      if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+      c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+      Inc(c_bsLive, 8);
+      Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+      Inc(c_strm^.total_in_lo32);
+      if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
     end;
     if uc = 1 then s^.inUse16[i] := BZ_TRUE else s^.inUse16[i] := BZ_FALSE;
     Inc(i);
@@ -1136,18 +1149,18 @@ begin
         s^.state := BZ_X_MAPPING_2;
         while True do
         begin
-          if s^.bsLive >= 1 then
+          if c_bsLive >= 1 then
           begin
-            uc := UChar((s^.bsBuff shr (s^.bsLive - 1)) and 1);
-            Dec(s^.bsLive, 1);
+            uc := UChar((c_bsBuff shr (c_bsLive - 1)) and 1);
+            Dec(c_bsLive, 1);
             Break;
           end;
-          if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-          s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-          Inc(s^.bsLive, 8);
-          Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-          Inc(s^.strm^.total_in_lo32);
-          if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+          if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+          c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+          Inc(c_bsLive, 8);
+          Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+          Inc(c_strm^.total_in_lo32);
+          if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
         end;
         if uc = 1 then s^.inUse[i * 16 + j] := BZ_TRUE;
         Inc(j);
@@ -1167,18 +1180,18 @@ begin
   s^.state := BZ_X_SELECTOR_1;
   while True do
   begin
-    if s^.bsLive >= 3 then
+    if c_bsLive >= 3 then
     begin
-      nGroups := Int32((s^.bsBuff shr (s^.bsLive - 3)) and 7);
-      Dec(s^.bsLive, 3);
+      nGroups := Int32((c_bsBuff shr (c_bsLive - 3)) and 7);
+      Dec(c_bsLive, 3);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   if (nGroups < 2) or (nGroups > BZ_N_GROUPS) then
     begin retVal := BZ_DATA_ERROR; goto save_state_and_return; end;
@@ -1188,18 +1201,18 @@ begin
   s^.state := BZ_X_SELECTOR_2;
   while True do
   begin
-    if s^.bsLive >= 15 then
+    if c_bsLive >= 15 then
     begin
-      nSelectors := Int32((s^.bsBuff shr (s^.bsLive - 15)) and $7FFF);
-      Dec(s^.bsLive, 15);
+      nSelectors := Int32((c_bsBuff shr (c_bsLive - 15)) and $7FFF);
+      Dec(c_bsLive, 15);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   if nSelectors < 1 then begin retVal := BZ_DATA_ERROR; goto save_state_and_return; end;
 
@@ -1214,18 +1227,18 @@ begin
       s^.state := BZ_X_SELECTOR_3;
       while True do
       begin
-        if s^.bsLive >= 1 then
+        if c_bsLive >= 1 then
         begin
-          uc := UChar((s^.bsBuff shr (s^.bsLive - 1)) and 1);
-          Dec(s^.bsLive, 1);
+          uc := UChar((c_bsBuff shr (c_bsLive - 1)) and 1);
+          Dec(c_bsLive, 1);
           Break;
         end;
-        if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-        s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-        Inc(s^.bsLive, 8);
-        Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-        Inc(s^.strm^.total_in_lo32);
-        if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+        if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+        c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+        Inc(c_bsLive, 8);
+        Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+        Inc(c_strm^.total_in_lo32);
+        if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
       end;
       if uc = 0 then Break;
       Inc(j);
@@ -1260,18 +1273,18 @@ begin
     s^.state := BZ_X_CODING_1;
     while True do
     begin
-      if s^.bsLive >= 5 then
+      if c_bsLive >= 5 then
       begin
-        curr := Int32((s^.bsBuff shr (s^.bsLive - 5)) and $1F);
-        Dec(s^.bsLive, 5);
+        curr := Int32((c_bsBuff shr (c_bsLive - 5)) and $1F);
+        Dec(c_bsLive, 5);
         Break;
       end;
-      if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-      s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-      Inc(s^.bsLive, 8);
-      Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-      Inc(s^.strm^.total_in_lo32);
-      if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+      if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+      c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+      Inc(c_bsLive, 8);
+      Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+      Inc(c_strm^.total_in_lo32);
+      if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
     end;
     i := 0;
     while i < alphaSize do
@@ -1285,18 +1298,18 @@ begin
         s^.state := BZ_X_CODING_2;
         while True do
         begin
-          if s^.bsLive >= 1 then
+          if c_bsLive >= 1 then
           begin
-            uc := UChar((s^.bsBuff shr (s^.bsLive - 1)) and 1);
-            Dec(s^.bsLive, 1);
+            uc := UChar((c_bsBuff shr (c_bsLive - 1)) and 1);
+            Dec(c_bsLive, 1);
             Break;
           end;
-          if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-          s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-          Inc(s^.bsLive, 8);
-          Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-          Inc(s^.strm^.total_in_lo32);
-          if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+          if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+          c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+          Inc(c_bsLive, 8);
+          Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+          Inc(c_strm^.total_in_lo32);
+          if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
         end;
         if uc = 0 then Break;
         { GET_BIT(BZ_X_CODING_3, uc) }
@@ -1304,18 +1317,18 @@ begin
         s^.state := BZ_X_CODING_3;
         while True do
         begin
-          if s^.bsLive >= 1 then
+          if c_bsLive >= 1 then
           begin
-            uc := UChar((s^.bsBuff shr (s^.bsLive - 1)) and 1);
-            Dec(s^.bsLive, 1);
+            uc := UChar((c_bsBuff shr (c_bsLive - 1)) and 1);
+            Dec(c_bsLive, 1);
             Break;
           end;
-          if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-          s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-          Inc(s^.bsLive, 8);
-          Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-          Inc(s^.strm^.total_in_lo32);
-          if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+          if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+          c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+          Inc(c_bsLive, 8);
+          Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+          Inc(c_strm^.total_in_lo32);
+          if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
         end;
         if uc = 0 then Inc(curr) else Dec(curr);
       end;
@@ -1386,18 +1399,18 @@ begin
   s^.state := BZ_X_MTF_1;
   while True do
   begin
-    if s^.bsLive >= zn then
+    if c_bsLive >= zn then
     begin
-      zvec := Int32((s^.bsBuff shr (s^.bsLive - zn)) and ((1 shl zn) - 1));
-      Dec(s^.bsLive, zn);
+      zvec := Int32((c_bsBuff shr (c_bsLive - zn)) and ((1 shl zn) - 1));
+      Dec(c_bsLive, zn);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   while True do
   begin
@@ -1408,18 +1421,18 @@ begin
     s^.state := BZ_X_MTF_2;
     while True do
     begin
-      if s^.bsLive >= 1 then
+      if c_bsLive >= 1 then
       begin
-        zj := Int32((s^.bsBuff shr (s^.bsLive - 1)) and 1);
-        Dec(s^.bsLive, 1);
+        zj := Int32((c_bsBuff shr (c_bsLive - 1)) and 1);
+        Dec(c_bsLive, 1);
         Break;
       end;
-      if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-      s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-      Inc(s^.bsLive, 8);
-      Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-      Inc(s^.strm^.total_in_lo32);
-      if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+      if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+      c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+      Inc(c_bsLive, 8);
+      Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+      Inc(c_strm^.total_in_lo32);
+      if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
     end;
     zvec := (zvec shl 1) or zj;
   end;
@@ -1464,18 +1477,18 @@ begin
         s^.state := BZ_X_MTF_3;
         while True do
         begin
-          if s^.bsLive >= zn then
+          if c_bsLive >= zn then
           begin
-            zvec := Int32((s^.bsBuff shr (s^.bsLive - zn)) and ((1 shl zn) - 1));
-            Dec(s^.bsLive, zn);
+            zvec := Int32((c_bsBuff shr (c_bsLive - zn)) and ((1 shl zn) - 1));
+            Dec(c_bsLive, zn);
             Break;
           end;
-          if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-          s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-          Inc(s^.bsLive, 8);
-          Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-          Inc(s^.strm^.total_in_lo32);
-          if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+          if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+          c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+          Inc(c_bsLive, 8);
+          Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+          Inc(c_strm^.total_in_lo32);
+          if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
         end;
         while True do
         begin
@@ -1486,18 +1499,18 @@ begin
           s^.state := BZ_X_MTF_4;
           while True do
           begin
-            if s^.bsLive >= 1 then
+            if c_bsLive >= 1 then
             begin
-              zj := Int32((s^.bsBuff shr (s^.bsLive - 1)) and 1);
-              Dec(s^.bsLive, 1);
+              zj := Int32((c_bsBuff shr (c_bsLive - 1)) and 1);
+              Dec(c_bsLive, 1);
               Break;
             end;
-            if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-            s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-            Inc(s^.bsLive, 8);
-            Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-            Inc(s^.strm^.total_in_lo32);
-            if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+            if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+            c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+            Inc(c_bsLive, 8);
+            Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+            Inc(c_strm^.total_in_lo32);
+            if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
           end;
           zvec := (zvec shl 1) or zj;
         end;
@@ -1624,18 +1637,18 @@ begin
       s^.state := BZ_X_MTF_5;
       while True do
       begin
-        if s^.bsLive >= zn then
+        if c_bsLive >= zn then
         begin
-          zvec := Int32((s^.bsBuff shr (s^.bsLive - zn)) and ((1 shl zn) - 1));
-          Dec(s^.bsLive, zn);
+          zvec := Int32((c_bsBuff shr (c_bsLive - zn)) and ((1 shl zn) - 1));
+          Dec(c_bsLive, zn);
           Break;
         end;
-        if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-        s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-        Inc(s^.bsLive, 8);
-        Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-        Inc(s^.strm^.total_in_lo32);
-        if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+        if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+        c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+        Inc(c_bsLive, 8);
+        Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+        Inc(c_strm^.total_in_lo32);
+        if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
       end;
       while True do
       begin
@@ -1646,18 +1659,18 @@ begin
         s^.state := BZ_X_MTF_6;
         while True do
         begin
-          if s^.bsLive >= 1 then
+          if c_bsLive >= 1 then
           begin
-            zj := Int32((s^.bsBuff shr (s^.bsLive - 1)) and 1);
-            Dec(s^.bsLive, 1);
+            zj := Int32((c_bsBuff shr (c_bsLive - 1)) and 1);
+            Dec(c_bsLive, 1);
             Break;
           end;
-          if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-          s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-          Inc(s^.bsLive, 8);
-          Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-          Inc(s^.strm^.total_in_lo32);
-          if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+          if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+          c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+          Inc(c_bsLive, 8);
+          Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+          Inc(c_strm^.total_in_lo32);
+          if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
         end;
         zvec := (zvec shl 1) or zj;
       end;
@@ -1801,18 +1814,18 @@ begin
   s^.state := BZ_X_ENDHDR_2;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   if uc <> $72 then begin retVal := BZ_DATA_ERROR; goto save_state_and_return; end;
 
@@ -1820,18 +1833,18 @@ begin
   s^.state := BZ_X_ENDHDR_3;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   if uc <> $45 then begin retVal := BZ_DATA_ERROR; goto save_state_and_return; end;
 
@@ -1839,18 +1852,18 @@ begin
   s^.state := BZ_X_ENDHDR_4;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   if uc <> $38 then begin retVal := BZ_DATA_ERROR; goto save_state_and_return; end;
 
@@ -1858,18 +1871,18 @@ begin
   s^.state := BZ_X_ENDHDR_5;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   if uc <> $50 then begin retVal := BZ_DATA_ERROR; goto save_state_and_return; end;
 
@@ -1877,18 +1890,18 @@ begin
   s^.state := BZ_X_ENDHDR_6;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   if uc <> $90 then begin retVal := BZ_DATA_ERROR; goto save_state_and_return; end;
 
@@ -1899,18 +1912,18 @@ begin
   s^.state := BZ_X_CCRC_1;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   s^.storedCombinedCRC := (s^.storedCombinedCRC shl 8) or UInt32(uc);
 
@@ -1918,18 +1931,18 @@ begin
   s^.state := BZ_X_CCRC_2;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   s^.storedCombinedCRC := (s^.storedCombinedCRC shl 8) or UInt32(uc);
 
@@ -1937,18 +1950,18 @@ begin
   s^.state := BZ_X_CCRC_3;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   s^.storedCombinedCRC := (s^.storedCombinedCRC shl 8) or UInt32(uc);
 
@@ -1956,18 +1969,18 @@ begin
   s^.state := BZ_X_CCRC_4;
   while True do
   begin
-    if s^.bsLive >= 8 then
+    if c_bsLive >= 8 then
     begin
-      uc := UChar((s^.bsBuff shr (s^.bsLive - 8)) and $FF);
-      Dec(s^.bsLive, 8);
+      uc := UChar((c_bsBuff shr (c_bsLive - 8)) and $FF);
+      Dec(c_bsLive, 8);
       Break;
     end;
-    if s^.strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
-    s^.bsBuff := (s^.bsBuff shl 8) or UInt32(PUChar(s^.strm^.next_in)^);
-    Inc(s^.bsLive, 8);
-    Inc(s^.strm^.next_in); Dec(s^.strm^.avail_in);
-    Inc(s^.strm^.total_in_lo32);
-    if s^.strm^.total_in_lo32 = 0 then Inc(s^.strm^.total_in_hi32);
+    if c_strm^.avail_in = 0 then begin retVal := BZ_OK; goto save_state_and_return; end;
+    c_bsBuff := (c_bsBuff shl 8) or UInt32(PUChar(c_strm^.next_in)^);
+    Inc(c_bsLive, 8);
+    Inc(c_strm^.next_in); Dec(c_strm^.avail_in);
+    Inc(c_strm^.total_in_lo32);
+    if c_strm^.total_in_lo32 = 0 then Inc(c_strm^.total_in_hi32);
   end;
   s^.storedCombinedCRC := (s^.storedCombinedCRC shl 8) or UInt32(uc);
 
@@ -1979,6 +1992,9 @@ begin
 
   { ---- Save state and return ---- }
   save_state_and_return:
+  { Save cached bit-buffer locals back to s^ }
+  s^.bsBuff := c_bsBuff;
+  s^.bsLive := c_bsLive;
   s^.save_i          := i;
   s^.save_j          := j;
   s^.save_t          := t;
