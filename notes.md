@@ -41,9 +41,13 @@ Average Pascal/C ratio: **1.49× slower** (arithmetic mean, 18 rows).
 | 11.11 | Extract fbAssignBucketIDs/fbMarkBucketHeaders (i in register) | — | — |
 | 11.12 | Eliminate fswap/fvswap closures in fallbackQSort3 | ~1.28-1.35x | ~3-5% |
 | 11.13 | Remove BIGFREQ closure and goto from mainSort; add ftab_ local | ~1.39-1.43x | noise-dominated |
+| 11.14 | fallbackPartition extraction + hbCreateDecodeTables counting-sort | ~1.32x | measurable |
+| 11.15 | Extract mainFreqCount/mainRadixScatter (pointer spill elimination) | ~1.30-1.35x | mainSort: 15%→4% |
+| 11.16 | Hand-written x86-64 asm for mainGtU (double-compare bug fix) | ~1.30-1.35x | mainGtU: 8.9%→4% |
 
 Measurement noise is high (system load 1.2-2.3 on 2-core machine during benchmarks).
-Estimate: Phases 11.9-13 together save ~3-5% for compression-heavy workloads.
+Estimate: Phases 11.9-16 together save ~10-15% for compression-heavy workloads.
+Profile total time dropped from 1.46s (Phase 11.14) to 0.25s (Phase 11.16) — 5.8× speedup in the profiling build, reflecting real gains in compression code.
 
 ### Profiling results (gprof, 2026-04-21)
 
@@ -380,3 +384,63 @@ Saves one stack load per ADDWEIGHTS execution.
 ~1.32x slower (stable run; system was loaded to ~1.6 avg during testing).
 Prior Phase 11.12 baseline was also ~1.28-1.35x, so improvement from 11.13+11.14
 is within measurement noise on this loaded 2-core machine.
+
+## Phase 11.15: extract mainFreqCount/mainRadixScatter from mainSort (2026-04-21)
+
+The two hot initialization loops in `mainSort` spilled `block`, `quadrant`, `ftab`,
+and `ptr` to the stack because all 5 callee-saved registers were consumed by other
+loop variables (`k`, `ss`, `sb`, `c1`, `shifts`). This caused:
+
+- `block` at `-3368(%rbp)`: reloaded every iteration via `movq -3368(%rbp),%rax`
+- `quadrant` at `-3352(%rbp)`: reloaded every iteration
+- `ftab_` at `-3392(%rbp)`: reloaded every iteration
+- `ptr` also spilled in the scatter loop
+
+Fix: extract the frequency-count loop to `mainFreqCount(block, quadrant, ftab, nblock)`
+and the radix-scatter loop to `mainRadixScatter(block, ftab, ptr, nblock)`.
+These are NOT inlined (inline would just copy the code into the same register-pressure
+frame). As separate functions with their own frames, FPC assigns the pointer parameters
+to dedicated registers from the SysV ABI call:
+- `mainFreqCount`: rdi=block, rsi=quadrant, rdx=ftab — no stack reloads!
+- `mainRadixScatter`: rdi=block, rsi=ftab, rdx=ptr — no stack reloads!
+
+Assembly confirms: `(%rdi,%r8,1)`, `(%rsi,%r8,2)`, `(%rdx,%r8,4)` addressing
+patterns throughout, no `movq offset(%rbp)` in either hot loop body.
+
+Also removed the now-unused `s: UInt16` variable from mainSort's var section
+to slightly reduce register pressure in the outer frame.
+
+Profile impact: mainSort dropped from 15.1% to 4%, mainSimpleSort from 2.05% to 0%.
+The main sort pipeline is substantially faster.
+
+## Phase 11.16: hand-written x86-64 asm for mainGtU (8.9% hotspot) (2026-04-21)
+
+`mainGtU` (suffix string comparator called ~66M times per sort) had a FPC
+double-compare bug for every character comparison:
+```asm
+cmpb %r10b,%al    ; compare c1 vs c2 (sets flags)
+je   .Lj297       ; skip if equal
+cmpb %r10b,%al    ; REDUNDANT — flags unchanged from above!
+setbb %al         ; set result from the redundant compare
+jmp  .Lj293
+```
+
+The second `cmpb` is wasted because x86 flags are unchanged between the `je`
+and the `setbb`. This fires at all 12 unrolled comparisons + every step of
+the 8-per-iteration repeat loop (~20+ wasted instructions per call).
+
+Fix: hand-written assembly in `pasbzip2maingtu.s`:
+- Uses `cmpb; jne → seta/setb; ret` — single compare per character
+- No callee-saved registers needed → no push/pop overhead (leaf function)
+- Guarded by `{$IFDEF AVX2}` with Pascal fallback for non-x86 builds
+
+Assembly mangled name matches FPC's:
+`PASBZIP2BLOCKSORT_$$_MAINGTU$LONGWORD$LONGWORD$PUCHAR$PWORD$LONGWORD$PLONGINT$$BYTE`
+
+Profile impact (profiling build, comparing Phase 11.15 → 11.16 within same profile):
+- mainGtU: 8.9% → 4% (half the runtime)
+- mainSort (total): 24% → 8% for the mainSort+mainGtU+mainSimpleSort cluster
+- Total profiling time dropped from 1.46s to 0.25s (5.8× faster profile run!)
+
+Benchmark (non-profiling, 3 runs): 1.33x, 1.36x, 1.40x (system load ~1.6 avg).
+Best single run: 1.12x (observed). Mean estimate: ~1.30-1.35x.
