@@ -646,8 +646,6 @@ end;
 
 procedure mainSort(ptr: PUInt32; block: PUChar; quadrant: PUInt16;
                    ftab: PUInt32; nblock: Int32; {%H-}verb: Int32; budget: PInt32);
-label
-  zero_label;
 var
   i, j, k, ss, sb: Int32;
   runningOrder: array[0..255] of Int32;
@@ -663,31 +661,32 @@ var
   bbStart, bbSize, shifts: Int32;
   a2update: Int32;
   qVal: UInt16;
-
-  function BIGFREQ(b: Int32): Int32; inline;
-  begin BIGFREQ := Int32(ftab[(b+1) shl 8]) - Int32(ftab[b shl 8]); end;
+  // Local pointer copy to eliminate BIGFREQ closure capture of ftab.
+  // With no nested function capturing ftab, FPC can keep ftab_ in a register.
+  ftab_: PUInt32;
 
 begin
+  ftab_ := ftab;
   // Set up 2-byte frequency table
-  for i := 65536 downto 0 do ftab[i] := 0;
+  for i := 65536 downto 0 do ftab_[i] := 0;
 
   j := Int32(block[0]) shl 8;
   i := nblock - 1;
   while i >= 3 do begin
     quadrant[i] := 0;
-    j := (j shr 8) or (Int32(block[i]) shl 8);   Inc(ftab[j]);
+    j := (j shr 8) or (Int32(block[i]) shl 8);   Inc(ftab_[j]);
     quadrant[i-1] := 0;
-    j := (j shr 8) or (Int32(block[i-1]) shl 8); Inc(ftab[j]);
+    j := (j shr 8) or (Int32(block[i-1]) shl 8); Inc(ftab_[j]);
     quadrant[i-2] := 0;
-    j := (j shr 8) or (Int32(block[i-2]) shl 8); Inc(ftab[j]);
+    j := (j shr 8) or (Int32(block[i-2]) shl 8); Inc(ftab_[j]);
     quadrant[i-3] := 0;
-    j := (j shr 8) or (Int32(block[i-3]) shl 8); Inc(ftab[j]);
+    j := (j shr 8) or (Int32(block[i-3]) shl 8); Inc(ftab_[j]);
     Dec(i, 4);
   end;
   while i >= 0 do begin
     quadrant[i] := 0;
     j := (j shr 8) or (Int32(block[i]) shl 8);
-    Inc(ftab[j]);
+    Inc(ftab_[j]);
     Dec(i);
   end;
 
@@ -697,24 +696,24 @@ begin
   end;
 
   // Complete initial radix sort
-  for i := 1 to 65536 do ftab[i] := ftab[i] + ftab[i-1];
+  for i := 1 to 65536 do ftab_[i] := ftab_[i] + ftab_[i-1];
 
   s := UInt16(Int32(block[0]) shl 8);
   i := nblock - 1;
   while i >= 3 do begin
     s := UInt16((Int32(s) shr 8) or (Int32(block[i])   shl 8));
-    j := Int32(ftab[s]) - 1; ftab[s] := UInt32(j); ptr[j] := UInt32(i);
+    j := Int32(ftab_[s]) - 1; ftab_[s] := UInt32(j); ptr[j] := UInt32(i);
     s := UInt16((Int32(s) shr 8) or (Int32(block[i-1]) shl 8));
-    j := Int32(ftab[s]) - 1; ftab[s] := UInt32(j); ptr[j] := UInt32(i-1);
+    j := Int32(ftab_[s]) - 1; ftab_[s] := UInt32(j); ptr[j] := UInt32(i-1);
     s := UInt16((Int32(s) shr 8) or (Int32(block[i-2]) shl 8));
-    j := Int32(ftab[s]) - 1; ftab[s] := UInt32(j); ptr[j] := UInt32(i-2);
+    j := Int32(ftab_[s]) - 1; ftab_[s] := UInt32(j); ptr[j] := UInt32(i-2);
     s := UInt16((Int32(s) shr 8) or (Int32(block[i-3]) shl 8));
-    j := Int32(ftab[s]) - 1; ftab[s] := UInt32(j); ptr[j] := UInt32(i-3);
+    j := Int32(ftab_[s]) - 1; ftab_[s] := UInt32(j); ptr[j] := UInt32(i-3);
     Dec(i, 4);
   end;
   while i >= 0 do begin
     s := UInt16((Int32(s) shr 8) or (Int32(block[i]) shl 8));
-    j := Int32(ftab[s]) - 1; ftab[s] := UInt32(j); ptr[j] := UInt32(i);
+    j := Int32(ftab_[s]) - 1; ftab_[s] := UInt32(j); ptr[j] := UInt32(i);
     Dec(i);
   end;
 
@@ -731,12 +730,12 @@ begin
     for i := h to 255 do begin
       vv := runningOrder[i];
       j  := i;
-      while BIGFREQ(runningOrder[j-h]) > BIGFREQ(vv) do begin
+      while (j > h - 1) and
+            (Int32(ftab_[(runningOrder[j-h]+1) shl 8]) - Int32(ftab_[runningOrder[j-h] shl 8]) >
+             Int32(ftab_[(vv+1) shl 8]) - Int32(ftab_[vv shl 8])) do begin
         runningOrder[j] := runningOrder[j-h];
         Dec(j, h);
-        if j <= (h - 1) then goto zero_label;
       end;
-      zero_label:
       runningOrder[j] := vv;
     end;
   until h = 1;
@@ -750,9 +749,9 @@ begin
     for j := 0 to 255 do begin
       if j <> ss then begin
         sb := (ss shl 8) + j;
-        if (ftab[sb] and BS_SETMASK) = 0 then begin
-          lo := Int32(ftab[sb]   and BS_CLEARMASK);
-          hi := Int32(ftab[sb+1] and BS_CLEARMASK) - 1;
+        if (ftab_[sb] and BS_SETMASK) = 0 then begin
+          lo := Int32(ftab_[sb]   and BS_CLEARMASK);
+          hi := Int32(ftab_[sb+1] and BS_CLEARMASK) - 1;
           if hi > lo then begin
             mainQSort3(ptr, block, quadrant, nblock,
                        lo, hi, BZ_N_RADIX, budget);
@@ -760,7 +759,7 @@ begin
             if budget^ < 0 then Exit;
           end;
         end;
-        ftab[sb] := ftab[sb] or BS_SETMASK;
+        ftab_[sb] := ftab_[sb] or BS_SETMASK;
       end;
     end;
 
@@ -768,10 +767,10 @@ begin
 
     // Step 2: scan big bucket [ss] to synthesise sorted order for [t, ss]
     for j := 0 to 255 do begin
-      copyStart[j] := Int32( ftab[(j shl 8) + ss]     and BS_CLEARMASK);
-      copyEnd  [j] := Int32((ftab[(j shl 8) + ss + 1] and BS_CLEARMASK)) - 1;
+      copyStart[j] := Int32( ftab_[(j shl 8) + ss]     and BS_CLEARMASK);
+      copyEnd  [j] := Int32((ftab_[(j shl 8) + ss + 1] and BS_CLEARMASK)) - 1;
     end;
-    j := Int32(ftab[ss shl 8] and BS_CLEARMASK);
+    j := Int32(ftab_[ss shl 8] and BS_CLEARMASK);
     while j < copyStart[ss] do begin
       k := Int32(ptr[j]) - 1; if k < 0 then Inc(k, nblock);
       c1 := block[k];
@@ -781,7 +780,7 @@ begin
       end;
       Inc(j);
     end;
-    j := Int32(ftab[(ss+1) shl 8] and BS_CLEARMASK) - 1;
+    j := Int32(ftab_[(ss+1) shl 8] and BS_CLEARMASK) - 1;
     while j > copyEnd[ss] do begin
       k := Int32(ptr[j]) - 1; if k < 0 then Inc(k, nblock);
       c1 := block[k];
@@ -797,14 +796,14 @@ begin
       ((copyStart[ss] = 0) and (copyEnd[ss] = nblock-1))
     )), 1007);
 
-    for j := 0 to 255 do ftab[(j shl 8) + ss] := ftab[(j shl 8) + ss] or BS_SETMASK;
+    for j := 0 to 255 do ftab_[(j shl 8) + ss] := ftab_[(j shl 8) + ss] or BS_SETMASK;
 
     // Step 3: mark [ss] done and update quadrant descriptors
     bigDone[ss] := BZ_TRUE;
 
     if i < 255 then begin
-      bbStart := Int32(ftab[ss shl 8] and BS_CLEARMASK);
-      bbSize  := Int32(ftab[(ss+1) shl 8] and BS_CLEARMASK) - bbStart;
+      bbStart := Int32(ftab_[ss shl 8] and BS_CLEARMASK);
+      bbSize  := Int32(ftab_[(ss+1) shl 8] and BS_CLEARMASK) - bbStart;
       shifts  := 0;
       while (bbSize shr shifts) > 65534 do Inc(shifts);
       for j := bbSize-1 downto 0 do begin

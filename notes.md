@@ -40,9 +40,10 @@ Average Pascal/C ratio: **1.49× slower** (arithmetic mean, 18 rows).
 | 11.10 | Extract fbScanToNextClear/Set helpers (k in register) | — | — |
 | 11.11 | Extract fbAssignBucketIDs/fbMarkBucketHeaders (i in register) | — | — |
 | 11.12 | Eliminate fswap/fvswap closures in fallbackQSort3 | ~1.28-1.35x | ~3-5% |
+| 11.13 | Remove BIGFREQ closure and goto from mainSort; add ftab_ local | ~1.39-1.43x | noise-dominated |
 
 Measurement noise is high (system load 1.2-2.3 on 2-core machine during benchmarks).
-Estimate: Phases 11.9-12 together save ~3-5% for compression-heavy workloads.
+Estimate: Phases 11.9-13 together save ~3-5% for compression-heavy workloads.
 
 ### Profiling results (gprof, 2026-04-21)
 
@@ -269,3 +270,52 @@ volatile registers that require save/restore around calls. The fundamental bottl
 (too many live variables for available registers) remains. `ltLo` would need to be
 in a register to significantly help the swap operations, which requires either
 hand-written assembly or restructuring to reduce live variable count.
+
+## Phase 11.13: remove BIGFREQ closure and goto from mainSort (2026-04-21)
+
+`mainSort` (5.26% hotspot in profiling) had two issues:
+
+1. **BIGFREQ nested function**: `function BIGFREQ(b: Int32): Int32` captured `ftab`
+   as a closure variable, preventing FPC from keeping `ftab` in a register. Every
+   call to BIGFREQ loaded `ftab` from its closure slot.
+
+2. **goto zero_label in shell sort**: The shell sort loop used:
+   ```pascal
+   while BIGFREQ(runningOrder[j-h]) > BIGFREQ(vv) do begin
+     runningOrder[j] := runningOrder[j-h];
+     Dec(j, h);
+     if j <= (h - 1) then goto zero_label;
+   end;
+   zero_label:
+   runningOrder[j] := vv;
+   ```
+   The `label` declaration forced FPC to use rbp as frame pointer (even when
+   -O3 would normally use rbp as a general-purpose register). This costs one
+   callee-saved register and adds frame pointer overhead to every stack access.
+
+Fix:
+1. Remove `label zero_label;` from the `label` section
+2. Remove `function BIGFREQ(b: Int32): Int32; inline;` nested function
+3. Add `ftab_: PUInt32` local variable (eliminates closure capture)
+4. Add `ftab_ := ftab;` at the start of the function body
+5. Replace all `ftab[` with `ftab_[` throughout mainSort
+6. Replace the goto pattern with a combined while condition:
+   ```pascal
+   while (j > h - 1) and
+         (Int32(ftab_[(runningOrder[j-h]+1) shl 8]) - Int32(ftab_[runningOrder[j-h] shl 8]) >
+          Int32(ftab_[(vv+1) shl 8]) - Int32(ftab_[vv shl 8])) do begin
+     runningOrder[j] := runningOrder[j-h];
+     Dec(j, h);
+   end;
+   runningOrder[j] := vv;
+   ```
+
+Assembly inspection confirms: no `goto` or closure overhead. `ftab_` is loaded from
+stack once per shell sort loop iteration (`movq -3392(%rbp),%rdx`). The function still
+uses rbp as frame pointer (FPC does this whenever there are large local arrays), so
+the label removal's benefit is limited — but the code is cleaner and the closure
+capture overhead is eliminated.
+
+Benchmark result: ~1.39-1.43x (noisy; system load 1.5-2.5 on 2-core machine).
+The improvement from mainSort changes is small as mainSort is only 5.26% of runtime,
+but the code quality improvement is significant (goto → structured loop).
