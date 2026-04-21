@@ -282,6 +282,145 @@ end;
 {$ENDIF AVX2}
 
 // ---------------------------------------------------------------------------
+// computeGroupCosts6  — fast-track cost accumulation for sendMTFValues
+//
+// Accumulates packed costs for 50 MTF symbols when nGroups=6.
+// Extracted from sendMTFValues as a separate (non-inline) function so FPC
+// gives it its own register frame: mtfv_gs in rdi, len_pack in rsi,
+// cost01/cost23/cost45 in three callee-saved registers (rbx, r12, r13).
+// Eliminates ~300 stack spills/reloads per group that occur in the
+// monolithic sendMTFValues frame.
+// ---------------------------------------------------------------------------
+procedure computeGroupCosts6(mtfv_gs: PUInt16; len_pack: PUInt32;
+                              var cost01, cost23, cost45: UInt32);
+{ NOT inline — own register frame essential for performance }
+var
+  c01, c23, c45: UInt32;
+  icv: UInt32;
+  base: PUInt32;
+begin
+  c01 := 0; c23 := 0; c45 := 0;
+  { len_pack layout: len_pack[icv][0..2] at byte offset icv*16 }
+  { Each len_pack[icv] entry is 3 UInt32 (indices 0,1,2) }
+  icv := mtfv_gs[ 0]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[ 1]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[ 2]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[ 3]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[ 4]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[ 5]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[ 6]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[ 7]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[ 8]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[ 9]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[10]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[11]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[12]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[13]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[14]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[15]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[16]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[17]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[18]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[19]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[20]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[21]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[22]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[23]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[24]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[25]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[26]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[27]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[28]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[29]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[30]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[31]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[32]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[33]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[34]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[35]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[36]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[37]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[38]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[39]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[40]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[41]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[42]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[43]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[44]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[45]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[46]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[47]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[48]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  icv := mtfv_gs[49]; base := len_pack + icv * 4; c01 += base[0]; c23 += base[1]; c45 += base[2];
+  cost01 := c01;
+  cost23 := c23;
+  cost45 := c45;
+end;
+
+// ---------------------------------------------------------------------------
+// accumGroupFreqs6  — fast-track frequency accumulation for sendMTFValues
+//
+// Increments rfreq[0..alphaSize-1] for 50 MTF symbols when nGroups=6.
+// Extracted so FPC gives it its own register frame: mtfv_gs in rdi,
+// rfreq_bt in rsi — the two hot pointers stay in dedicated registers
+// throughout all 50 increments, eliminating ~200 stack reloads per group.
+// ---------------------------------------------------------------------------
+procedure accumGroupFreqs6(mtfv_gs: PUInt16; rfreq_bt: PInt32);
+{ NOT inline — own register frame essential for performance }
+begin
+  Inc(rfreq_bt[mtfv_gs[ 0]]);
+  Inc(rfreq_bt[mtfv_gs[ 1]]);
+  Inc(rfreq_bt[mtfv_gs[ 2]]);
+  Inc(rfreq_bt[mtfv_gs[ 3]]);
+  Inc(rfreq_bt[mtfv_gs[ 4]]);
+  Inc(rfreq_bt[mtfv_gs[ 5]]);
+  Inc(rfreq_bt[mtfv_gs[ 6]]);
+  Inc(rfreq_bt[mtfv_gs[ 7]]);
+  Inc(rfreq_bt[mtfv_gs[ 8]]);
+  Inc(rfreq_bt[mtfv_gs[ 9]]);
+  Inc(rfreq_bt[mtfv_gs[10]]);
+  Inc(rfreq_bt[mtfv_gs[11]]);
+  Inc(rfreq_bt[mtfv_gs[12]]);
+  Inc(rfreq_bt[mtfv_gs[13]]);
+  Inc(rfreq_bt[mtfv_gs[14]]);
+  Inc(rfreq_bt[mtfv_gs[15]]);
+  Inc(rfreq_bt[mtfv_gs[16]]);
+  Inc(rfreq_bt[mtfv_gs[17]]);
+  Inc(rfreq_bt[mtfv_gs[18]]);
+  Inc(rfreq_bt[mtfv_gs[19]]);
+  Inc(rfreq_bt[mtfv_gs[20]]);
+  Inc(rfreq_bt[mtfv_gs[21]]);
+  Inc(rfreq_bt[mtfv_gs[22]]);
+  Inc(rfreq_bt[mtfv_gs[23]]);
+  Inc(rfreq_bt[mtfv_gs[24]]);
+  Inc(rfreq_bt[mtfv_gs[25]]);
+  Inc(rfreq_bt[mtfv_gs[26]]);
+  Inc(rfreq_bt[mtfv_gs[27]]);
+  Inc(rfreq_bt[mtfv_gs[28]]);
+  Inc(rfreq_bt[mtfv_gs[29]]);
+  Inc(rfreq_bt[mtfv_gs[30]]);
+  Inc(rfreq_bt[mtfv_gs[31]]);
+  Inc(rfreq_bt[mtfv_gs[32]]);
+  Inc(rfreq_bt[mtfv_gs[33]]);
+  Inc(rfreq_bt[mtfv_gs[34]]);
+  Inc(rfreq_bt[mtfv_gs[35]]);
+  Inc(rfreq_bt[mtfv_gs[36]]);
+  Inc(rfreq_bt[mtfv_gs[37]]);
+  Inc(rfreq_bt[mtfv_gs[38]]);
+  Inc(rfreq_bt[mtfv_gs[39]]);
+  Inc(rfreq_bt[mtfv_gs[40]]);
+  Inc(rfreq_bt[mtfv_gs[41]]);
+  Inc(rfreq_bt[mtfv_gs[42]]);
+  Inc(rfreq_bt[mtfv_gs[43]]);
+  Inc(rfreq_bt[mtfv_gs[44]]);
+  Inc(rfreq_bt[mtfv_gs[45]]);
+  Inc(rfreq_bt[mtfv_gs[46]]);
+  Inc(rfreq_bt[mtfv_gs[47]]);
+  Inc(rfreq_bt[mtfv_gs[48]]);
+  Inc(rfreq_bt[mtfv_gs[49]]);
+end;
+
+// ---------------------------------------------------------------------------
 // emitMTFGroupFast  — helper for the sendMTFValues hot path
 //
 // Emits exactly 50 Huffman-coded MTF symbols from mtfv[0..49].
@@ -444,59 +583,10 @@ begin
 
       if (nGroups = 6) and (50 = ge - gs + 1) then begin
         // fast track: nGroups=6, group size=50
-        cost01 := 0; cost23 := 0; cost45 := 0;
-
-        icv := mtfv[gs+ 0]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+ 1]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+ 2]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+ 3]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+ 4]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+ 5]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+ 6]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+ 7]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+ 8]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+ 9]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+10]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+11]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+12]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+13]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+14]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+15]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+16]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+17]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+18]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+19]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+20]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+21]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+22]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+23]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+24]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+25]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+26]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+27]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+28]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+29]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+30]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+31]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+32]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+33]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+34]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+35]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+36]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+37]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+38]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+39]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+40]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+41]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+42]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+43]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+44]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+45]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+46]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+47]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+48]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-        icv := mtfv[gs+49]; cost01 += s^.len_pack[icv][0]; cost23 += s^.len_pack[icv][1]; cost45 += s^.len_pack[icv][2];
-
+        // Delegate to computeGroupCosts6 which gets its own register frame
+        // (mtfv+gs in rdi, len_pack in rsi) — eliminates ~300 stack spills.
+        computeGroupCosts6(mtfv + gs, @s^.len_pack[0][0],
+                           cost01, cost23, cost45);
         cost[0] := UInt16(cost01 and $FFFF); cost[1] := UInt16(cost01 shr 16);
         cost[2] := UInt16(cost23 and $FFFF); cost[3] := UInt16(cost23 shr 16);
         cost[4] := UInt16(cost45 and $FFFF); cost[5] := UInt16(cost45 shr 16);
@@ -521,57 +611,9 @@ begin
 
       // Accumulate symbol frequencies for the selected table
       if (nGroups = 6) and (50 = ge - gs + 1) then begin
-        // fast track
-        Inc(s^.rfreq[bt][mtfv[gs+ 0]]);
-        Inc(s^.rfreq[bt][mtfv[gs+ 1]]);
-        Inc(s^.rfreq[bt][mtfv[gs+ 2]]);
-        Inc(s^.rfreq[bt][mtfv[gs+ 3]]);
-        Inc(s^.rfreq[bt][mtfv[gs+ 4]]);
-        Inc(s^.rfreq[bt][mtfv[gs+ 5]]);
-        Inc(s^.rfreq[bt][mtfv[gs+ 6]]);
-        Inc(s^.rfreq[bt][mtfv[gs+ 7]]);
-        Inc(s^.rfreq[bt][mtfv[gs+ 8]]);
-        Inc(s^.rfreq[bt][mtfv[gs+ 9]]);
-        Inc(s^.rfreq[bt][mtfv[gs+10]]);
-        Inc(s^.rfreq[bt][mtfv[gs+11]]);
-        Inc(s^.rfreq[bt][mtfv[gs+12]]);
-        Inc(s^.rfreq[bt][mtfv[gs+13]]);
-        Inc(s^.rfreq[bt][mtfv[gs+14]]);
-        Inc(s^.rfreq[bt][mtfv[gs+15]]);
-        Inc(s^.rfreq[bt][mtfv[gs+16]]);
-        Inc(s^.rfreq[bt][mtfv[gs+17]]);
-        Inc(s^.rfreq[bt][mtfv[gs+18]]);
-        Inc(s^.rfreq[bt][mtfv[gs+19]]);
-        Inc(s^.rfreq[bt][mtfv[gs+20]]);
-        Inc(s^.rfreq[bt][mtfv[gs+21]]);
-        Inc(s^.rfreq[bt][mtfv[gs+22]]);
-        Inc(s^.rfreq[bt][mtfv[gs+23]]);
-        Inc(s^.rfreq[bt][mtfv[gs+24]]);
-        Inc(s^.rfreq[bt][mtfv[gs+25]]);
-        Inc(s^.rfreq[bt][mtfv[gs+26]]);
-        Inc(s^.rfreq[bt][mtfv[gs+27]]);
-        Inc(s^.rfreq[bt][mtfv[gs+28]]);
-        Inc(s^.rfreq[bt][mtfv[gs+29]]);
-        Inc(s^.rfreq[bt][mtfv[gs+30]]);
-        Inc(s^.rfreq[bt][mtfv[gs+31]]);
-        Inc(s^.rfreq[bt][mtfv[gs+32]]);
-        Inc(s^.rfreq[bt][mtfv[gs+33]]);
-        Inc(s^.rfreq[bt][mtfv[gs+34]]);
-        Inc(s^.rfreq[bt][mtfv[gs+35]]);
-        Inc(s^.rfreq[bt][mtfv[gs+36]]);
-        Inc(s^.rfreq[bt][mtfv[gs+37]]);
-        Inc(s^.rfreq[bt][mtfv[gs+38]]);
-        Inc(s^.rfreq[bt][mtfv[gs+39]]);
-        Inc(s^.rfreq[bt][mtfv[gs+40]]);
-        Inc(s^.rfreq[bt][mtfv[gs+41]]);
-        Inc(s^.rfreq[bt][mtfv[gs+42]]);
-        Inc(s^.rfreq[bt][mtfv[gs+43]]);
-        Inc(s^.rfreq[bt][mtfv[gs+44]]);
-        Inc(s^.rfreq[bt][mtfv[gs+45]]);
-        Inc(s^.rfreq[bt][mtfv[gs+46]]);
-        Inc(s^.rfreq[bt][mtfv[gs+47]]);
-        Inc(s^.rfreq[bt][mtfv[gs+48]]);
-        Inc(s^.rfreq[bt][mtfv[gs+49]]);
+        // fast track: delegate to accumGroupFreqs6 for its own register frame
+        // (mtfv+gs in rdi, rfreq[bt] in rsi) — eliminates ~200 stack reloads.
+        accumGroupFreqs6(mtfv + gs, @s^.rfreq[bt][0]);
       end else begin
         // slow version
         for i := gs to ge do
